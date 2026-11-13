@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+**/dist
+out
+tmp
+assets/test
+.git
+.env
+.env.*
+*.md
