@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+tmp/
+assets/test/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
