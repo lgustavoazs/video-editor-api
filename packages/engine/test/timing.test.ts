@@ -47,7 +47,7 @@ test("modo audio: fotos dividem a duração do trecho", () => {
   const segment = resolveAudioSegment({ start: 5, duration: 15 }, 45);
   const r = computeTiming({ ...base, photoCount: 6, mode: "audio", segment });
   // d = (15 + 5*0.6)/6 = 3 s -> 90 quadros; transição 18 quadros
-  assert.deepEqual(r.clipFrames, [90, 90, 90, 90, 90, 90]);
+  assert.deepEqual(r.photoFrames, [90, 90, 90, 90, 90, 90]);
   assert.equal(r.transitionFrames, 18);
   assert.equal(r.totalFrames, 6 * 90 - 5 * 18);
   assert.equal(r.total, 15);
@@ -76,8 +76,8 @@ test("modo fixed: trecho curto sem loop falha; com loop passa", () => {
   });
   assert.equal(r.total, 20);
   // 600 quadros + 4 transições de 18 = 672 a dividir por 5: resto 2 vai para os primeiros clipes
-  assert.deepEqual(r.clipFrames, [135, 135, 134, 134, 134]);
-  assert.equal(r.clipFrames.reduce((a, b) => a + b, 0) - 4 * r.transitionFrames, r.totalFrames);
+  assert.deepEqual(r.photoFrames, [135, 135, 134, 134, 134]);
+  assert.equal(r.photoFrames.reduce((a, b) => a + b, 0) - 4 * r.transitionFrames, r.totalFrames);
 });
 
 test("fotos demais: erro informa o máximo suportado", () => {
@@ -103,4 +103,32 @@ test("uma foto: sem transição", () => {
   const r = computeTiming({ ...base, photoCount: 1, mode: "fixed", requestedTotal: 4 });
   assert.equal(r.transitionFrames, 0);
   assert.equal(r.totalFrames, 120);
+});
+
+test("cartões de logo têm duração fixa e as fotos dividem o resto", () => {
+  // 4 fotos + abertura (2 s) + encerramento (2 s) = 6 segmentos, 5 transições de 18 quadros
+  const r = computeTiming({ ...base, photoCount: 4, mode: "fixed", requestedTotal: 16, cards: [2, 2] });
+  assert.deepEqual(r.cardFrames, [60, 60]);
+  assert.equal(r.total, 16);
+  const sum = r.photoFrames.reduce((a, b) => a + b, 0) + 120 - 5 * r.transitionFrames;
+  assert.equal(sum, r.totalFrames);
+  // (480 + 90 - 120) / 4 = 112,5 quadros por foto
+  assert.deepEqual(r.photoFrames, [113, 113, 112, 112]);
+});
+
+test("cartões que não deixam tempo mínimo para as fotos geram erro com o tempo que falta", () => {
+  try {
+    computeTiming({ ...base, photoCount: 6, mode: "fixed", requestedTotal: 10, cards: [3, 3] });
+    assert.fail("esperava erro");
+  } catch (err) {
+    assert.ok(err instanceof EngineError);
+    assert.equal(err.code, "too_many_photos");
+    assert.ok((err.details.missingSeconds as number) > 0);
+    assert.ok((err.details.maxPhotos as number) < 6);
+  }
+});
+
+test("cartão curto demais é esticado para caber entre duas transições", () => {
+  const r = computeTiming({ ...base, transition: 1, photoCount: 2, mode: "fixed", requestedTotal: 12, cards: [0.8] });
+  assert.equal(r.cardFrames[0], 2 * 30 + 1);
 });
