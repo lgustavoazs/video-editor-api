@@ -1,15 +1,38 @@
 {
   "id": "limpo",
-  "version": 1,
+  "version": 2,
   "name": "Limpo",
   "photo": {
-    "fit": "cover",
+    "fit": "auto",
     "filters": [
-      { "type": "color", "brightness": 0, "contrast": 1.03, "saturation": 1.05, "temperature": 0 }
+      {
+        "type": "color",
+        "brightness": 0,
+        "contrast": 1.03,
+        "saturation": 1.05,
+        "temperature": 0
+      }
     ]
   },
-  "motion": { "type": "kenburns", "zoomFrom": 1.0, "zoomTo": 1.12, "direction": "alternate" },
-  "transition": { "type": "fade", "duration": 0.6 },
-  "timing": { "perPhotoMin": 1.5, "perPhotoMax": 6 },
-  "audio": { "fadeIn": 0.5, "fadeOut": 1.5, "volume": 1.0 }
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.0,
+    "zoomTo": 1.12,
+    "direction": "alternate",
+    "pan": "none"
+  },
+  "transition": {
+    "type": "fade",
+    "duration": 0.6
+  },
+  "timing": {
+    "perPhotoMin": 1.5,
+    "perPhotoMax": 6
+  },
+  "audio": {
+    "fadeIn": 0.5,
+    "fadeOut": 1.5,
+    "volume": 1.0
+  },
+  "description": "Neutro: cores quase originais, zoom suave e fade. Base para os demais estilos."
 }
