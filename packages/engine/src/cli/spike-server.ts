@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { EngineError } from "../errors.js";
 import { getPlatform } from "../platforms.js";
 import { loadPreset } from "../preset.js";
-import { renderVideo } from "../render.js";
+import { defaultThreads, renderVideo } from "../render.js";
 import { makeTestAssets } from "./make-test-assets.js";
 import { runFfmpeg } from "../ffmpeg.js";
 import { ALL_TRANSITIONS, supportedTransitions } from "../transitions.js";
@@ -84,7 +84,7 @@ const server = createServer(async (req, res) => {
           encode: { x264Preset: x264, threads },
         });
         return json(res, 200, {
-          threads: threads ?? "auto",
+          threads: threads ?? defaultThreads(),
           machine: { cpus: availableParallelism(), memoryMb: Math.round(totalmem() / 1024 / 1024) },
           x264Preset: x264,
           duration: result.duration,

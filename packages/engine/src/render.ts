@@ -1,5 +1,5 @@
 import { access, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EngineError } from "./errors.js";
 import { parseBench, probe, runFfmpeg, summarizeFfmpegError, type BenchStats } from "./ffmpeg.js";
@@ -42,7 +42,7 @@ export interface RenderRequest {
   /** Pastas de recursos do motor. */
   assets: { lutsDir: string; fontsDir: string };
   /** Ajustes de encode, usados em medições. */
-  /** `threads` limita as threads de filtros e do codificador (padrão: o FFmpeg decide). */
+  /** `threads` limita as threads de filtros e do codificador (padrão: `defaultThreads()`). */
   encode?: { x264Preset?: string; crf?: number; supersample?: number; threads?: number };
 }
 
@@ -140,6 +140,16 @@ function planCards(
     between: between && count > 0 ? { ...between, every, count } : undefined,
     outro: plan("outro", b.outro),
   };
+}
+
+/**
+ * Threads usadas quando a requisição não informa: a variável FFMPEG_THREADS ou, na falta dela,
+ * a quantidade de CPUs que o processo pode de fato usar (respeita a cota do container), até 8.
+ */
+export function defaultThreads(): number {
+  const fromEnv = Number(process.env.FFMPEG_THREADS);
+  if (Number.isInteger(fromEnv) && fromEnv >= 1 && fromEnv <= 64) return fromEnv;
+  return Math.max(1, Math.min(8, availableParallelism()));
 }
 
 export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
@@ -360,14 +370,16 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     });
 
     const args: string[] = ["-hide_banner", "-y", "-benchmark"];
-    const threads = req.encode?.threads;
-    if (threads !== undefined) {
-      if (!Number.isInteger(threads) || threads < 1 || threads > 64) {
-        throw new EngineError("invalid_threads", "encode.threads deve ser um inteiro entre 1 e 64");
-      }
-      args.push("-filter_complex_threads", String(threads), "-filter_threads", String(threads));
+    // Em containers, o FFmpeg enxerga os núcleos do host (ex.: 48) e não a cota do container
+    // (ex.: 8). Com dezenas de entradas isso cria milhares de threads e o codificador não
+    // consegue abrir. Por isso o limite é sempre explícito.
+    const threads = req.encode?.threads ?? defaultThreads();
+    if (!Number.isInteger(threads) || threads < 1 || threads > 64) {
+      throw new EngineError("invalid_threads", "encode.threads deve ser um inteiro entre 1 e 64");
     }
-    for (const file of inputs) args.push("-i", file);
+    args.push("-filter_complex_threads", String(threads), "-filter_threads", String(threads));
+    // Cada entrada é uma única imagem: uma thread de decodificação basta.
+    for (const file of inputs) args.push("-threads", "1", "-i", file);
     if (req.audio) args.push("-i", req.audio.file);
     args.push("-filter_complex", graph.graph, "-map", `[${graph.videoLabel}]`);
     if (graph.audioLabel) {
@@ -376,7 +388,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     args.push(
       "-c:v", "libx264",
       "-preset", req.encode?.x264Preset ?? "medium",
-      ...(threads !== undefined ? ["-threads", String(threads)] : []),
+      "-threads", String(threads),
       "-crf", String(req.encode?.crf ?? 20),
       "-profile:v", "high",
       "-pix_fmt", "yuv420p",
