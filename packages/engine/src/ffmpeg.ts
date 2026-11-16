@@ -119,5 +119,10 @@ export function summarizeFfmpegError(stderr: string): string {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && l.length <= 400 && !l.startsWith("bench:"));
-  return lines.slice(-12).join("\n");
+  // A causa costuma aparecer bem antes do fim do log (ex.: erro do codificador ao abrir).
+  // Por isso o resumo traz as primeiras linhas de erro e, depois, o final do log.
+  const isError = /error|fail|invalid|cannot|could not|unable|malloc|no such|not found|unrecognized|killed/i;
+  const first = [...new Set(lines.filter((l) => isError.test(l)))].slice(0, 12);
+  const tail = lines.slice(-6).filter((l) => !first.includes(l));
+  return [...first, ...(tail.length > 0 ? ["...", ...tail] : [])].join("\n");
 }

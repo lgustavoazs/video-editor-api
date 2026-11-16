@@ -8,15 +8,15 @@
  *
  *   GET /spike/info?token=...        -> versão do FFmpeg e transições disponíveis no container
  *
- * Parâmetros opcionais de /spike: x264 (preset do x264), photos (1-30), duration (5-180 s).
+ * Parâmetros opcionais de /spike: threads (limite de threads do FFmpeg), x264 (preset do x264), photos (1-30), duration (5-180 s).
  * Pior caso da Fase 1A: /spike?token=...&photos=30&duration=60
  * Sem a variável SPIKE_TOKEN definida, as rotas /spike ficam desativadas.
  */
 import { timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import { availableParallelism, totalmem } from "node:os";
+import { availableParallelism, cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { EngineError } from "../errors.js";
 import { getPlatform } from "../platforms.js";
@@ -63,6 +63,8 @@ const server = createServer(async (req, res) => {
       if (!X264_PRESETS.has(x264)) return json(res, 400, { error: "invalid_x264_preset" });
       const photoCount = Math.min(30, Math.max(1, Number(url.searchParams.get("photos") ?? 6) || 6));
       const duration = Math.min(180, Math.max(5, Number(url.searchParams.get("duration") ?? 15) || 15));
+      const threadsParam = url.searchParams.get("threads");
+      const threads = threadsParam ? Math.min(64, Math.max(1, Math.trunc(Number(threadsParam)) || 1)) : undefined;
 
       busy = true;
       try {
@@ -79,9 +81,10 @@ const server = createServer(async (req, res) => {
           timing: { mode: "fixed", total: duration },
           audio: { file: assets.tone, start: 0, loop: true },
           assets: ENGINE_ASSETS,
-          encode: { x264Preset: x264 },
+          encode: { x264Preset: x264, threads },
         });
         return json(res, 200, {
+          threads: threads ?? "auto",
           machine: { cpus: availableParallelism(), memoryMb: Math.round(totalmem() / 1024 / 1024) },
           x264Preset: x264,
           duration: result.duration,
@@ -97,8 +100,21 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/spike/info") {
       const version = (await runFfmpeg(["-hide_banner", "-version"])).stdout.split("\n")[0] ?? "";
       const supported = await supportedTransitions();
+      // Limites do container (cgroup v2), para comparar com o que o Node e o FFmpeg enxergam.
+      const cgroup = async (file: string) =>
+        (await readFile(`/sys/fs/cgroup/${file}`, "utf8").catch(() => "indisponível")).trim();
+      const encoders = (await runFfmpeg(["-hide_banner", "-h", "encoder=libx264"])).stdout.split("\n")[0] ?? "";
       return json(res, 200, {
         ffmpeg: version,
+        x264: encoders,
+        machine: {
+          availableParallelism: availableParallelism(),
+          cpusVisible: cpus().length,
+          totalMemoryMb: Math.round(totalmem() / 1024 / 1024),
+          cgroupCpuMax: await cgroup("cpu.max"),
+          cgroupMemoryMax: await cgroup("memory.max"),
+          cgroupMemoryCurrent: await cgroup("memory.current"),
+        },
         transitions: {
           available: ALL_TRANSITIONS.filter((t) => supported.has(t)).length,
           expected: ALL_TRANSITIONS.length,
