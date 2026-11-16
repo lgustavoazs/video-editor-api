@@ -42,7 +42,8 @@ export interface RenderRequest {
   /** Pastas de recursos do motor. */
   assets: { lutsDir: string; fontsDir: string };
   /** Ajustes de encode, usados em medições. */
-  encode?: { x264Preset?: string; crf?: number; supersample?: number };
+  /** `threads` limita as threads de filtros e do codificador (padrão: o FFmpeg decide). */
+  encode?: { x264Preset?: string; crf?: number; supersample?: number; threads?: number };
 }
 
 export interface RenderResult {
@@ -359,6 +360,13 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     });
 
     const args: string[] = ["-hide_banner", "-y", "-benchmark"];
+    const threads = req.encode?.threads;
+    if (threads !== undefined) {
+      if (!Number.isInteger(threads) || threads < 1 || threads > 64) {
+        throw new EngineError("invalid_threads", "encode.threads deve ser um inteiro entre 1 e 64");
+      }
+      args.push("-filter_complex_threads", String(threads), "-filter_threads", String(threads));
+    }
     for (const file of inputs) args.push("-i", file);
     if (req.audio) args.push("-i", req.audio.file);
     args.push("-filter_complex", graph.graph, "-map", `[${graph.videoLabel}]`);
@@ -368,6 +376,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     args.push(
       "-c:v", "libx264",
       "-preset", req.encode?.x264Preset ?? "medium",
+      ...(threads !== undefined ? ["-threads", String(threads)] : []),
       "-crf", String(req.encode?.crf ?? 20),
       "-profile:v", "high",
       "-pix_fmt", "yuv420p",
