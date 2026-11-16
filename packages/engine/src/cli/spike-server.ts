@@ -6,6 +6,8 @@
  *   GET /spike?token=...             -> renderiza o vídeo de teste e devolve as medições (JSON)
  *   GET /spike/video?token=...       -> baixa o último vídeo renderizado
  *
+ *   GET /spike?token=...&async=1     -> inicia o render e responde na hora (202)
+ *   GET /spike/result?token=...      -> estado e medições do último render assíncrono
  *   GET /spike/info?token=...        -> versão do FFmpeg e transições disponíveis no container
  *
  * Parâmetros opcionais de /spike: threads (limite de threads do FFmpeg), x264 (preset do x264), photos (1-30), duration (5-180 s).
@@ -33,6 +35,8 @@ const OUTPUT = join(OUT_DIR, "spike.mp4");
 const X264_PRESETS = new Set(["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"]);
 
 let busy = false;
+/** Estado do último render pedido com async=1. */
+let last: Record<string, unknown> = { status: "idle" };
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -66,8 +70,8 @@ const server = createServer(async (req, res) => {
       const threadsParam = url.searchParams.get("threads");
       const threads = threadsParam ? Math.min(64, Math.max(1, Math.trunc(Number(threadsParam)) || 1)) : undefined;
 
-      busy = true;
-      try {
+      const params = { photos: photoCount, duration, x264, threads: threads ?? defaultThreads() };
+      const run = async () => {
         const assets = await makeTestAssets();
         const result = await renderVideo({
           // repete as 6 imagens de teste até completar a quantidade pedida
@@ -83,18 +87,47 @@ const server = createServer(async (req, res) => {
           assets: ENGINE_ASSETS,
           encode: { x264Preset: x264, threads },
         });
-        return json(res, 200, {
-          threads: threads ?? defaultThreads(),
+        return {
+          threads: params.threads,
           machine: { cpus: availableParallelism(), memoryMb: Math.round(totalmem() / 1024 / 1024) },
           x264Preset: x264,
           duration: result.duration,
           photoCount: result.itemCount,
           stats: result.stats,
           warnings: result.warnings,
-        });
+        };
+      };
+
+      busy = true;
+      // Modo assíncrono: responde na hora e o resultado fica em /spike/result.
+      // Serve para clientes que desistem antes de um render longo terminar.
+      if (url.searchParams.get("async") === "1") {
+        last = { status: "running", params, startedAt: new Date().toISOString() };
+        run()
+          .then((result) => {
+            last = { ...last, status: "done", finishedAt: new Date().toISOString(), result };
+          })
+          .catch((err: unknown) => {
+            const error =
+              err instanceof EngineError
+                ? { error: err.code, message: err.message, details: err.details }
+                : { error: "internal_error", message: String(err) };
+            last = { ...last, status: "failed", finishedAt: new Date().toISOString(), error };
+          })
+          .finally(() => {
+            busy = false;
+          });
+        return json(res, 202, last);
+      }
+      try {
+        return json(res, 200, await run());
       } finally {
         busy = false;
       }
+    }
+
+    if (url.pathname === "/spike/result") {
+      return json(res, 200, last);
     }
 
     if (url.pathname === "/spike/info") {
