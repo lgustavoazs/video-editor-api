@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 export const TEST_ASSETS_DIR = resolve(REPO_ROOT, "assets/test");
 export const PRESETS_DIR = resolve(REPO_ROOT, "presets");
+export const LUTS_DIR = resolve(PRESETS_DIR, "luts");
+export const FONTS_DIR = resolve(REPO_ROOT, "assets/fonts");
 export const OUT_DIR = resolve(REPO_ROOT, "out");
+export const ENGINE_ASSETS = { lutsDir: LUTS_DIR, fontsDir: FONTS_DIR };
 
 /** Resolve caminhos relativos a partir de onde o usuário chamou o comando (npm muda o cwd). */
 export function fromInvocationDir(path: string): string {

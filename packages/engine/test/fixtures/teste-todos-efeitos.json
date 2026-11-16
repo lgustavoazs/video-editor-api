@@ -1,0 +1,126 @@
+{
+  "id": "teste-todos-efeitos",
+  "version": 1,
+  "name": "Teste: todos os efeitos",
+  "extends": "limpo",
+  "photo": {
+    "fit": "auto",
+    "filters": [
+      {
+        "type": "color",
+        "brightness": 0.02,
+        "contrast": 1.08,
+        "saturation": 1.1,
+        "temperature": 0.1
+      },
+      {
+        "type": "curves",
+        "preset": "medium_contrast"
+      },
+      {
+        "type": "grayscale",
+        "amount": 0.15
+      },
+      {
+        "type": "sepia",
+        "amount": 0.2
+      },
+      {
+        "type": "lut",
+        "file": "cinema-azul-laranja.cube"
+      },
+      {
+        "type": "blur",
+        "radius": 0.6
+      },
+      {
+        "type": "sharpen",
+        "amount": 0.8
+      },
+      {
+        "type": "clarity",
+        "amount": 0.5
+      },
+      {
+        "type": "vignette",
+        "strength": 0.35
+      },
+      {
+        "type": "grain",
+        "amount": 8
+      }
+    ]
+  },
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.12,
+    "zoomTo": 1.25,
+    "direction": "alternate",
+    "pan": "alternate"
+  },
+  "transition": {
+    "types": [
+      "slideleft",
+      "circleopen",
+      "wipeup",
+      "dissolve",
+      "revealright",
+      "hlwind"
+    ],
+    "order": "random",
+    "seed": 7,
+    "duration": 0.5
+  },
+  "timing": {
+    "perPhotoMin": 1.2,
+    "perPhotoMax": 6
+  },
+  "audio": {
+    "fadeIn": 0.4,
+    "fadeOut": 1.0,
+    "volume": 0.9
+  },
+  "letterbox": 0.05,
+  "text": {
+    "title": {
+      "position": "top",
+      "size": 0.045,
+      "start": 2.5,
+      "duration": 3
+    },
+    "caption": {
+      "position": "bottom",
+      "size": 0.03
+    }
+  },
+  "branding": {
+    "watermark": {
+      "role": "brand",
+      "position": "top-right",
+      "width": 0.18,
+      "opacity": 0.9
+    },
+    "intro": {
+      "role": "brand",
+      "duration": 1.8,
+      "background": "#101010",
+      "width": 0.55
+    },
+    "between": {
+      "role": "partner",
+      "duration": 1.5,
+      "background": "#ffffff",
+      "width": 0.4,
+      "every": 3,
+      "caption": "Apoio",
+      "captionColor": "#222222"
+    },
+    "outro": {
+      "role": "partner",
+      "duration": 2.2,
+      "background": "#000000",
+      "width": 0.5,
+      "caption": "Patrocínio oficial"
+    }
+  }
+}

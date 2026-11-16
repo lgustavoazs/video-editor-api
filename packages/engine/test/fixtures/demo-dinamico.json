@@ -1,0 +1,62 @@
+{
+  "id": "demo-dinamico",
+  "version": 1,
+  "name": "Demonstração: dinâmico",
+  "extends": "limpo",
+  "description": "Realce de detalhe, deslocamento lateral e transições em rodízio.",
+  "photo": {
+    "fit": "auto",
+    "filters": [
+      {
+        "type": "sharpen",
+        "amount": 0.7
+      },
+      {
+        "type": "clarity",
+        "amount": 0.6
+      },
+      {
+        "type": "color",
+        "saturation": 1.12,
+        "contrast": 1.05
+      }
+    ]
+  },
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.1,
+    "zoomTo": 1.2,
+    "direction": "alternate",
+    "pan": "alternate"
+  },
+  "transition": {
+    "types": [
+      "slideleft",
+      "smoothright",
+      "coverup",
+      "circleopen"
+    ],
+    "order": "cycle",
+    "duration": 0.5
+  },
+  "text": {
+    "caption": {
+      "position": "bottom",
+      "size": 0.03
+    }
+  },
+  "branding": {
+    "watermark": {
+      "role": "brand",
+      "position": "top-left",
+      "width": 0.16,
+      "opacity": 0.95
+    },
+    "outro": {
+      "role": "brand",
+      "duration": 2.0,
+      "background": "#0b0b0b",
+      "width": 0.5
+    }
+  }
+}

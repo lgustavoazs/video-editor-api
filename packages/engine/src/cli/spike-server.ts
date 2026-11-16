@@ -1,12 +1,15 @@
 /**
- * Servidor TEMPORÁRIO da Fase 0: mede tempo e consumo de render no container da Railway.
+ * Servidor TEMPORÁRIO de medição: mede tempo e consumo de render no container da Railway.
  * Será substituído pela API (Fastify) na Fase 2.
  *
  *   GET /health                      -> 200
  *   GET /spike?token=...             -> renderiza o vídeo de teste e devolve as medições (JSON)
  *   GET /spike/video?token=...       -> baixa o último vídeo renderizado
  *
- * Parâmetros opcionais de /spike: x264 (preset do x264), photos (1-6).
+ *   GET /spike/info?token=...        -> versão do FFmpeg e transições disponíveis no container
+ *
+ * Parâmetros opcionais de /spike: x264 (preset do x264), photos (1-30), duration (5-180 s).
+ * Pior caso da Fase 1A: /spike?token=...&photos=30&duration=60
  * Sem a variável SPIKE_TOKEN definida, as rotas /spike ficam desativadas.
  */
 import { timingSafeEqual } from "node:crypto";
@@ -20,7 +23,9 @@ import { getPlatform } from "../platforms.js";
 import { loadPreset } from "../preset.js";
 import { renderVideo } from "../render.js";
 import { makeTestAssets } from "./make-test-assets.js";
-import { OUT_DIR, PRESETS_DIR } from "./paths.js";
+import { runFfmpeg } from "../ffmpeg.js";
+import { ALL_TRANSITIONS, supportedTransitions } from "../transitions.js";
+import { ENGINE_ASSETS, OUT_DIR, PRESETS_DIR } from "./paths.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const TOKEN = process.env.SPIKE_TOKEN ?? "";
@@ -47,7 +52,7 @@ const server = createServer(async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "method_not_allowed" });
     if (url.pathname === "/health") return json(res, 200, { status: "ok" });
 
-    if (url.pathname === "/spike" || url.pathname === "/spike/video") {
+    if (url.pathname.startsWith("/spike")) {
       if (TOKEN.length === 0) return json(res, 503, { error: "spike_disabled", message: "Defina SPIKE_TOKEN" });
       if (!authorized(url)) return json(res, 401, { error: "unauthorized" });
     }
@@ -56,31 +61,50 @@ const server = createServer(async (req, res) => {
       if (busy) return json(res, 429, { error: "busy", message: "Já existe um render em andamento" });
       const x264 = url.searchParams.get("x264") ?? "medium";
       if (!X264_PRESETS.has(x264)) return json(res, 400, { error: "invalid_x264_preset" });
-      const photoCount = Math.min(6, Math.max(1, Number(url.searchParams.get("photos") ?? 6) || 6));
+      const photoCount = Math.min(30, Math.max(1, Number(url.searchParams.get("photos") ?? 6) || 6));
+      const duration = Math.min(180, Math.max(5, Number(url.searchParams.get("duration") ?? 15) || 15));
 
       busy = true;
       try {
         const assets = await makeTestAssets();
         const result = await renderVideo({
-          photos: assets.photos.slice(0, photoCount),
+          // repete as 6 imagens de teste até completar a quantidade pedida
+          items: Array.from({ length: photoCount }, (_, i) => ({
+            type: "photo" as const,
+            file: assets.photos[i % assets.photos.length]!,
+          })),
           preset: await loadPreset(join(PRESETS_DIR, "limpo.json")),
           platform: getPlatform("instagram_reels"),
           output: OUTPUT,
-          timing: { mode: "audio" },
-          audio: { file: assets.tone, start: 5, duration: 15 },
+          timing: { mode: "fixed", total: duration },
+          audio: { file: assets.tone, start: 0, loop: true },
+          assets: ENGINE_ASSETS,
           encode: { x264Preset: x264 },
         });
         return json(res, 200, {
           machine: { cpus: availableParallelism(), memoryMb: Math.round(totalmem() / 1024 / 1024) },
           x264Preset: x264,
           duration: result.duration,
-          photoCount: result.photoCount,
+          photoCount: result.itemCount,
           stats: result.stats,
           warnings: result.warnings,
         });
       } finally {
         busy = false;
       }
+    }
+
+    if (url.pathname === "/spike/info") {
+      const version = (await runFfmpeg(["-hide_banner", "-version"])).stdout.split("\n")[0] ?? "";
+      const supported = await supportedTransitions();
+      return json(res, 200, {
+        ffmpeg: version,
+        transitions: {
+          available: ALL_TRANSITIONS.filter((t) => supported.has(t)).length,
+          expected: ALL_TRANSITIONS.length,
+          missing: ALL_TRANSITIONS.filter((t) => !supported.has(t)),
+        },
+      });
     }
 
     if (url.pathname === "/spike/video") {

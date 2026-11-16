@@ -109,3 +109,15 @@ export function parseBench(stderr: string): BenchStats {
   if (rss) stats.maxRssMb = Math.round((Number(rss[1]) / 1024) * 10) / 10;
   return stats;
 }
+
+/**
+ * Resume o erro do FFmpeg: ele repete o filtergraph inteiro na saída, o que esconde
+ * a mensagem útil. Ficam só as linhas curtas, que são as de diagnóstico.
+ */
+export function summarizeFfmpegError(stderr: string): string {
+  const lines = stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && l.length <= 400 && !l.startsWith("bench:"));
+  return lines.slice(-12).join("\n");
+}
