@@ -8,7 +8,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 - **Sem .NET.** TypeScript em Node.js 22, em tudo.
 - **Motor de vídeo: FFmpeg**, sempre chamado com array de argumentos (`spawn`), nunca via shell.
 - **Não iniciar implementação de uma fase sem a confirmação do dono.** Primeiro negociar o escopo.
-- Fluxo de trabalho: uma branch e um pull request por fase; `main` é o que vai para produção.
+- Fluxo de trabalho: uma branch e um pull request por fase ou correção; `main` é o que vai para produção. O dono dispensou o pedido de autorização para o merge dos pull requests; iniciar uma fase continua exigindo a confirmação dele.
 - Textos voltados ao usuário (mensagens de erro, README, comentários) em português.
 
 ## Arquitetura
@@ -51,7 +51,8 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 
 ## Pendências conhecidas
 
-- Otimização de CPU e memória adiada por decisão do dono (limitar threads do FFmpeg, reduzir o supersample).
+- O FFmpeg roda sempre com limite explícito de threads (`defaultThreads()` ou `FFMPEG_THREADS`): em container ele enxerga os núcleos do host, e sem limite o codificador falha ao abrir com muitas fotos.
+- Otimização de memória adiada por decisão do dono (reduzir o supersample).
 - Durações máximas e zonas seguras das plataformas mudam com frequência; revisar `platforms.ts` periodicamente.
 - Texto com várias linhas fica alinhado à esquerda dentro do bloco centralizado.
 - `cli/spike-server.ts` e o `CMD` do Dockerfile são temporários; saem na Fase 2.
