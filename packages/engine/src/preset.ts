@@ -78,7 +78,7 @@ export interface Preset {
   };
   transition: TransitionConfig;
   timing: { perPhotoMin: number; perPhotoMax: number };
-  audio: { fadeIn: number; fadeOut: number; volume: number };
+  audio: { fadeIn: number; fadeOut: number; volume: number; clipDucking: number };
   letterbox: number;
   text: { title: TitleStyle | null; caption: TextStyle | null } | null;
   branding: {

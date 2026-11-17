@@ -2,10 +2,20 @@ import { access, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EngineError } from "./errors.js";
-import { parseBench, probe, runFfmpeg, summarizeFfmpegError, type BenchStats } from "./ffmpeg.js";
+import { displaySize, isHdr, MAX_CLIP_SIDE, MAX_CLIPS, resolveClipRange, type ClipRangeInput } from "./clip.js";
+import {
+  availableFilters,
+  parseBench,
+  probe,
+  probeClip,
+  runFfmpeg,
+  summarizeFfmpegError,
+  type BenchStats,
+  type ClipInfo,
+} from "./ffmpeg.js";
 import { buildFiltergraph, panDirection, zoomRange, type Segment } from "./filtergraph.js";
 import type { PlatformProfile } from "./platforms.js";
-import { prepareCard, preparePhoto, prepareWatermark, type Focus } from "./prepare.js";
+import { coverLoss, prepareCard, preparePhoto, prepareWatermark, resolveFit, type Focus } from "./prepare.js";
 import type { CardConfig, LogoRole, Preset } from "./preset.js";
 import {
   charsPerLine,
@@ -20,14 +30,17 @@ import { assertTransitionsSupported, pickTransitions } from "./transitions.js";
 
 export const MAX_ITEMS = 30;
 
-export interface RenderItem {
-  /** "clip" (vídeo) entra na Fase 1C. */
+export interface RenderItem extends ClipRangeInput {
   type: "photo" | "clip";
   file: string;
-  /** Ponto de interesse da foto (0 a 1 em cada eixo). */
+  /** Ponto de interesse (0 a 1 em cada eixo), usado no corte. */
   focus?: Focus;
   /** Legenda exibida sobre o item, se o preset tiver estilo de legenda. */
   caption?: string;
+  /** Só clipes: mistura o som original do clipe à música. Padrão: false (mudo). */
+  keepAudio?: boolean;
+  /** Só clipes: volume do som original, de 0 a 2. Padrão: 1. */
+  volume?: number;
 }
 
 export interface RenderRequest {
@@ -55,6 +68,8 @@ export interface RenderResult {
   itemCount: number;
   /** Enquadramento efetivo de cada item, na ordem recebida. */
   fits: ("cover" | "contain")[];
+  /** Detalhes de cada clipe usado, na ordem em que aparecem. */
+  clips: { item: number; start: number; end: number; hdr: boolean; keptAudio: boolean }[];
   /** Transição usada em cada passagem da linha do tempo. */
   transitions: string[];
   audioSegment?: { start: number; end: number; looped: boolean };
@@ -80,12 +95,23 @@ function validateRequest(req: RenderRequest): void {
       maxPhotos: MAX_ITEMS,
     });
   }
+  let clips = 0;
   req.items.forEach((item, i) => {
-    if (item.type === "clip") {
-      throw new EngineError("not_implemented", "Clipes de vídeo entram na Fase 1C", { item: i });
+    if (item.type !== "photo" && item.type !== "clip") {
+      throw new EngineError("invalid_item", `items[${i}].type deve ser "photo" ou "clip"`, { item: i });
     }
-    if (item.type !== "photo") {
-      throw new EngineError("invalid_item", `items[${i}].type deve ser "photo"`, { item: i });
+    if (item.type === "clip") {
+      clips++;
+      if (item.keepAudio !== undefined && typeof item.keepAudio !== "boolean") {
+        throw new EngineError("invalid_clip", `items[${i}].keepAudio deve ser true ou false`, { item: i });
+      }
+      if (item.volume !== undefined && !(typeof item.volume === "number" && item.volume >= 0 && item.volume <= 2)) {
+        throw new EngineError("invalid_clip", `items[${i}].volume deve estar entre 0 e 2`, { item: i });
+      }
+    } else if ([item.start, item.end, item.duration, item.keepAudio, item.volume].some((v) => v !== undefined)) {
+      throw new EngineError("invalid_item", `items[${i}]: start, end, duration, keepAudio e volume valem só para clipes`, {
+        item: i,
+      });
     }
     if (item.focus) {
       const { x, y } = item.focus;
@@ -99,6 +125,9 @@ function validateRequest(req: RenderRequest): void {
       });
     }
   });
+  if (clips > MAX_CLIPS) {
+    throw new EngineError("too_many_clips", `Máximo de ${MAX_CLIPS} clipes por vídeo`, { clipCount: clips, maxClips: MAX_CLIPS });
+  }
   if (req.title !== undefined && cleanText(req.title).length > MAX_TITLE_LENGTH) {
     throw new EngineError("text_too_long", `title: máximo de ${MAX_TITLE_LENGTH} caracteres`);
   }
@@ -177,6 +206,48 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     segment = resolveAudioSegment(req.audio, info.duration);
   }
 
+  // 1b. Clipes: sonda cada arquivo, resolve o trecho e decide enquadramento e conversão de cor.
+  const filters = await availableFilters();
+  const canToneMap = filters.has("zscale") && filters.has("tonemap");
+  interface PlannedClip {
+    item: number;
+    info: ClipInfo;
+    start: number;
+    length: number;
+    fit: "cover" | "contain";
+    focus: Focus;
+    hdr: boolean;
+    audio?: { volume: number };
+  }
+  const clipPlans = new Map<number, PlannedClip>();
+  for (const [i, item] of req.items.entries()) {
+    if (item.type !== "clip") continue;
+    const info = await probeClip(item.file);
+    if (Math.max(info.width, info.height) > MAX_CLIP_SIDE) {
+      throw new EngineError("clip_too_large", `items[${i}]: resolução máxima de ${MAX_CLIP_SIDE} px no lado maior (4K)`, {
+        item: i, width: info.width, height: info.height,
+      });
+    }
+    const range = resolveClipRange(item, info.duration, i);
+    const size = displaySize(info);
+    const fit = resolveFit(preset.photo, coverLoss(size.width, size.height, W, H), item.focus !== undefined);
+    let hdr = isHdr(info);
+    if (hdr && !canToneMap) {
+      warnings.push(`O clipe ${i + 1} é HDR, mas o FFmpeg instalado não converte HDR; as cores podem sair lavadas.`);
+      hdr = false;
+    }
+    let audio: PlannedClip["audio"];
+    if (item.keepAudio) {
+      if (info.hasAudio) audio = { volume: item.volume ?? 1 };
+      else warnings.push(`O clipe ${i + 1} não tem som; o pedido para manter o som original foi ignorado.`);
+    }
+    clipPlans.set(i, {
+      item: i, info, ...range, fit, hdr, audio,
+      focus: fit === "cover" ? (item.focus ?? { x: 0.5, y: 0.5 }) : { x: 0.5, y: 0.5 },
+    });
+  }
+  const photoCount = count - clipPlans.size;
+
   // 2. Cartões de logo e duração proporcional.
   const logos = new Map((req.logos ?? []).map((l) => [l.role, l.file]));
   const cards = planCards(preset, logos, count, warnings);
@@ -186,7 +257,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     ...(cards.outro ? [cards.outro.config.duration] : []),
   ];
   const timing = computeTiming({
-    photoCount: count,
+    photoCount,
     fps,
     transition: preset.transition.duration,
     perPhotoMin: preset.timing.perPhotoMin,
@@ -196,6 +267,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     requestedTotal: req.timing.total,
     segment,
     cards: cardDurations,
+    clips: [...clipPlans.values()].map((c) => c.length),
   });
   warnings.push(...timing.warnings);
   const cardFrames = [...timing.cardFrames];
@@ -216,6 +288,8 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
   const workDir = await mkdtemp(join(tmpdir(), "render-"));
   try {
     const inputs: string[] = [];
+    /** Opções de entrada de cada input (clipes: posição e duração do trecho). */
+    const inputOptions = new Map<number, string[]>();
     const segments: Segment[] = [];
     /** true quando a passagem ANTES do segmento i toca um cartão (usa sempre fade). */
     const touchesCard: boolean[] = [];
@@ -249,13 +323,9 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
 
     // 3. Monta a linha do tempo: abertura, itens (com cartões intercalados) e encerramento.
     if (cards.intro) await addCard(cards.intro);
+    let photoIndex = 0;
+    let clipIndex = 0;
     for (const [i, item] of req.items.entries()) {
-      const file = join(workDir, `foto-${String(i).padStart(3, "0")}.jpg`);
-      const prepared = await preparePhoto(
-        item.file, file, Math.round(W * supersample), Math.round(H * supersample), preset.photo, item.focus,
-      );
-      fits.push(prepared.fit);
-      const zoom = zoomRange(preset.motion, i);
       const caption = item.caption ? cleanText(item.caption) : "";
       let captionFile: string | undefined;
       if (caption) {
@@ -265,16 +335,43 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
           warnings.push("Legendas foram enviadas, mas o preset não define estilo de legenda; elas foram ignoradas.");
         }
       }
-      inputs.push(file);
-      segments.push({
-        kind: "photo",
-        frames: timing.photoFrames[i]!,
-        zoomFrom: zoom.from,
-        zoomTo: zoom.to,
-        pan: panDirection(preset.motion, i),
-        focus: prepared.focus,
-        captionFile,
-      });
+
+      const clip = clipPlans.get(i);
+      if (clip) {
+        fits.push(clip.fit);
+        // margem de meio segundo: o filtergraph corta na contagem exata de quadros
+        inputOptions.set(inputs.length, [
+          "-threads", "2",
+          "-ss", clip.start.toFixed(6),
+          "-t", Math.min(clip.length + 0.5, clip.info.duration - clip.start + 0.5).toFixed(6),
+        ]);
+        inputs.push(item.file);
+        segments.push({
+          kind: "clip",
+          frames: timing.clipFrames[clipIndex++]!,
+          video: { fit: clip.fit, focus: clip.focus, hdr: clip.hdr, info: clip.info },
+          captionFile,
+          audio: clip.audio,
+        });
+      } else {
+        const file = join(workDir, `foto-${String(i).padStart(3, "0")}.jpg`);
+        const prepared = await preparePhoto(
+          item.file, file, Math.round(W * supersample), Math.round(H * supersample), preset.photo, item.focus,
+        );
+        fits.push(prepared.fit);
+        const zoom = zoomRange(preset.motion, photoIndex);
+        inputs.push(file);
+        segments.push({
+          kind: "photo",
+          frames: timing.photoFrames[photoIndex]!,
+          zoomFrom: zoom.from,
+          zoomTo: zoom.to,
+          pan: panDirection(preset.motion, photoIndex),
+          focus: prepared.focus,
+          captionFile,
+        });
+        photoIndex++;
+      }
       const isLast = i === count - 1;
       if (cards.between && !isLast && (i + 1) % cards.between.every === 0) await addCard(cards.between);
     }
@@ -325,11 +422,11 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
         let startFrame = 0;
         segments.forEach((s, i) => {
           const endFrame = startFrame + s.frames;
-          if (s.kind === "photo") {
+          if (s.kind !== "card") {
             const from = (i === 0 ? 0 : startFrame + tf / 2) / fps;
             const to = (i === segments.length - 1 ? timing.totalFrames : endFrame - tf / 2) / fps;
             const last = windows.at(-1);
-            if (last && segments[i - 1]!.kind === "photo") last.to = to;
+            if (last && segments[i - 1]!.kind !== "card") last.to = to;
             else windows.push({ from, to });
           }
           startFrame = endFrame - tf;
@@ -378,8 +475,10 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
       throw new EngineError("invalid_threads", "encode.threads deve ser um inteiro entre 1 e 64");
     }
     args.push("-filter_complex_threads", String(threads), "-filter_threads", String(threads));
-    // Cada entrada é uma única imagem: uma thread de decodificação basta.
-    for (const file of inputs) args.push("-threads", "1", "-i", file);
+    // Imagens: uma thread de decodificação basta. Clipes: duas, com a posição do trecho.
+    for (const [index, file] of inputs.entries()) {
+      args.push(...(inputOptions.get(index) ?? ["-threads", "1"]), "-i", file);
+    }
     if (req.audio) args.push("-i", req.audio.file);
     args.push("-filter_complex", graph.graph, "-map", `[${graph.videoLabel}]`);
     if (graph.audioLabel) {
@@ -423,6 +522,13 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
       fps,
       itemCount: count,
       fits,
+      clips: [...clipPlans.values()].map((c) => ({
+        item: c.item,
+        start: c.start,
+        end: round(c.start + c.length),
+        hdr: c.hdr,
+        keptAudio: c.audio !== undefined,
+      })),
       transitions,
       audioSegment: segment
         ? { start: segment.start, end: segment.start + Math.min(segment.length, timing.total), looped }

@@ -62,7 +62,7 @@ export const presetSchema = {
 
     photo: {
       type: "object",
-      title: "Foto",
+      title: "Foto e clipe", description: "Enquadramento e filtros de cor valem para fotos e clipes de vídeo",
       additionalProperties: false,
       properties: {
         fit: {
@@ -204,6 +204,10 @@ export const presetSchema = {
         fadeIn: { type: "number", minimum: 0, maximum: 10, default: 0.5, title: "Fade de entrada (s)" },
         fadeOut: { type: "number", minimum: 0, maximum: 10, default: 1.5, title: "Fade de saída (s)" },
         volume: { type: "number", minimum: 0, maximum: 2, default: 1, title: "Volume" },
+        clipDucking: {
+          type: "number", minimum: 0, maximum: 1, default: 0.35, title: "Música durante clipes com som",
+          description: "Volume da música (fração) enquanto toca o som original de um clipe; 1 não abaixa",
+        },
       },
     },
 

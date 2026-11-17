@@ -5,6 +5,9 @@
  *   npm run sample -- --photos ./fotos --preset limpo --audio ./musica.mp3 --start 0:32 --end 0:56 \
  *       --logo-brand ./logo.png --title "Copa Masters"
  *
+ * Clipes de vídeo entram no arquivo de pedido com "type": "clip" (ou pela extensão do arquivo),
+ * com trecho opcional (start, end ou duration) e som original opcional (keepAudio, volume).
+ *
  * Uso completo (arquivo no mesmo formato do campo "options" da API):
  *   npm run sample -- --request ./pedido.json
  */
@@ -18,6 +21,7 @@ import { renderVideo, type RenderItem, type RenderRequest } from "../render.js";
 import { ENGINE_ASSETS, fromInvocationDir, OUT_DIR, PRESETS_DIR, TEST_ASSETS_DIR } from "./paths.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".m4v", ".webm", ".mkv"]);
 
 const HELP = `Uso: npm run sample -- [opções]
 
@@ -25,7 +29,8 @@ const HELP = `Uso: npm run sample -- [opções]
                          Caminhos de arquivo são relativos à pasta do JSON.
                          As opções abaixo valem quando --request não é usado.
 
-  --photos <pasta>       Pasta com as fotos (ordem alfabética). Padrão: assets/test
+  --photos <pasta>       Pasta com fotos e clipes (ordem alfabética; vídeos entram como clipes inteiros,
+                         mudos). Padrão: assets/test
   --preset <id|arquivo>  Preset da pasta presets/ ou caminho de um JSON. Padrão: limpo
   --platform <id>        Perfil de plataforma. Padrão: instagram_reels
   --audio <arquivo>      Faixa de áudio (opcional)
@@ -46,7 +51,17 @@ interface RequestFile {
   preset?: string;
   platform?: string;
   timing?: { mode?: "audio" | "fixed"; total?: number };
-  items?: { type?: "photo" | "clip"; file: string; focus?: { x: number; y: number }; caption?: string }[];
+  items?: {
+    type?: "photo" | "clip";
+    file: string;
+    focus?: { x: number; y: number };
+    caption?: string;
+    start?: number | string;
+    end?: number | string;
+    duration?: number | string;
+    keepAudio?: boolean;
+    volume?: number;
+  }[];
   audio?: { file: string; start?: number | string; end?: number | string; duration?: number | string; loop?: boolean };
   logos?: { role: LogoRole; file: string }[];
   title?: string;
@@ -58,15 +73,18 @@ function presetPath(arg: string, baseDir: string): string {
   return isAbsolute(arg) ? arg : resolve(baseDir, arg);
 }
 
-async function photosFromDir(dir: string): Promise<RenderItem[]> {
+async function itemsFromDir(dir: string): Promise<RenderItem[]> {
   const entries = await readdir(dir).catch(() => {
     throw new EngineError("no_photos", `Pasta de fotos não encontrada: ${dir}`);
   });
   const items = entries
-    .filter((f) => IMAGE_EXTENSIONS.has(extname(f).toLowerCase()))
+    .filter((f) => IMAGE_EXTENSIONS.has(extname(f).toLowerCase()) || VIDEO_EXTENSIONS.has(extname(f).toLowerCase()))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .map((f): RenderItem => ({ type: "photo", file: join(dir, f) }));
-  if (items.length === 0) throw new EngineError("no_photos", `Nenhuma foto em ${dir}`);
+    .map((f): RenderItem => ({
+      type: VIDEO_EXTENSIONS.has(extname(f).toLowerCase()) ? "clip" : "photo",
+      file: join(dir, f),
+    }));
+  if (items.length === 0) throw new EngineError("no_photos", `Nenhuma foto ou clipe em ${dir}`);
   return items;
 }
 
@@ -114,7 +132,11 @@ async function main(): Promise<void> {
       throw new EngineError("no_photos", 'O pedido precisa de uma lista "items"');
     }
     request = {
-      items: json.items.map((i) => ({ type: i.type ?? "photo", file: rel(i.file), focus: i.focus, caption: i.caption })),
+      items: json.items.map((i) => ({
+        ...i,
+        type: i.type ?? (VIDEO_EXTENSIONS.has(extname(i.file).toLowerCase()) ? "clip" : "photo"),
+        file: rel(i.file),
+      })),
       preset: await loadPreset(presetPath(json.preset ?? "limpo", base), { presetsDir: PRESETS_DIR }),
       platform: getPlatform(json.platform ?? "instagram_reels"),
       output: values.out ? fromInvocationDir(values.out) : json.out ? rel(json.out) : join(OUT_DIR, "amostra.mp4"),
@@ -135,7 +157,10 @@ async function main(): Promise<void> {
     if (values["logo-partner"]) logos.push({ role: "partner", file: fromInvocationDir(values["logo-partner"]) });
     const invocationDir = process.env.INIT_CWD ?? process.cwd();
     request = {
-      items: await photosFromDir(values.photos ? fromInvocationDir(values.photos) : TEST_ASSETS_DIR),
+      items: (await itemsFromDir(values.photos ? fromInvocationDir(values.photos) : TEST_ASSETS_DIR)).filter(
+        // sem --photos, usa só as imagens de teste (os clipes de teste entram pelo arquivo de pedido)
+        (item) => values.photos !== undefined || item.type === "photo",
+      ),
       preset: await loadPreset(presetPath(values.preset ?? "limpo", invocationDir), { presetsDir: PRESETS_DIR }),
       platform: getPlatform(values.platform ?? "instagram_reels"),
       output: values.out ? fromInvocationDir(values.out) : join(OUT_DIR, "amostra.mp4"),
