@@ -176,6 +176,8 @@ const server = createServer(async (req, res) => {
           tonemap: filters.has("tonemap"),
           libx265: /\blibx265\b/.test(encoders),
         },
+        // títulos, legendas e textos dos cartões dependem do drawtext (FFmpeg com libfreetype)
+        text: { drawtext: filters.has("drawtext") },
       });
     }
 

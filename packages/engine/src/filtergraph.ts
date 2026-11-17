@@ -140,13 +140,16 @@ export function buildFiltergraph(input: FiltergraphInput): Filtergraph {
           drawText({ style: preset.text.caption, layout, textFile: segment.captionFile, fontsDir: input.fontsDir }),
         );
       }
-      // repete o último quadro se o arquivo tiver um quadro a menos e corta na contagem exata
+      // repete o último quadro se o arquivo tiver um quadro a menos e corta na contagem exata.
+      // O fps final declara a taxa de quadros no ramo: o FFmpeg 7 perde essa informação
+      // no overlay do fundo desfocado, e o xfade recusa entradas sem ela.
       chain.push(
         "format=yuv420p",
         "setsar=1",
         "tpad=stop_mode=clone:stop_duration=1",
         `trim=end_frame=${segment.frames}`,
         "setpts=PTS-STARTPTS",
+        `fps=${fps}`,
       );
       parts.push(`[${clip.label}]${chain.join(",")}[v${i}]`);
       return;
