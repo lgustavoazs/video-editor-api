@@ -29,6 +29,7 @@ export {
   type TimingResult,
 } from "./timing.js";
 export { buildFiltergraph } from "./filtergraph.js";
-export { probe } from "./ffmpeg.js";
+export { availableFilters, probe, probeClip, type ClipInfo } from "./ffmpeg.js";
+export { MAX_CLIP_SIDE, MAX_CLIPS, MIN_CLIP_SECONDS, resolveClipRange } from "./clip.js";
 export type { Focus } from "./prepare.js";
 export { renderVideo, MAX_ITEMS, type RenderItem, type RenderRequest, type RenderResult } from "./render.js";

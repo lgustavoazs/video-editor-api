@@ -89,6 +89,97 @@ export async function probe(file: string): Promise<MediaInfo> {
   };
 }
 
+export interface ClipInfo {
+  duration: number;
+  /** Dimensões codificadas (antes da rotação). */
+  width: number;
+  height: number;
+  /** Rotação de exibição em graus (0, 90, 180 ou 270), gravada pelo celular. */
+  rotation: number;
+  /** Proporção do pixel (1 na quase totalidade dos vídeos). */
+  sampleAspect: number;
+  hasAudio: boolean;
+  codec: string;
+  pixFmt: string;
+  colorTransfer?: string;
+  colorPrimaries?: string;
+  colorSpace?: string;
+}
+
+/** Sonda um clipe de vídeo: dimensões, rotação, cor (para detectar HDR) e presença de áudio. */
+export async function probeClip(file: string): Promise<ClipInfo> {
+  const res = await run(FFPROBE, [
+    "-v", "error",
+    "-show_entries",
+    "format=duration:stream=index,codec_type,codec_name,width,height,sample_aspect_ratio,pix_fmt," +
+      "color_transfer,color_primaries,color_space:stream_side_data=rotation:stream_tags=rotate",
+    "-of", "json",
+    file,
+  ]);
+  if (res.code !== 0) {
+    throw new EngineError("unreadable_clip", `Clipe de vídeo ilegível: ${file}`, { stderr: res.stderr.slice(-500) });
+  }
+  type Stream = {
+    codec_type?: string;
+    codec_name?: string;
+    width?: number;
+    height?: number;
+    sample_aspect_ratio?: string;
+    pix_fmt?: string;
+    color_transfer?: string;
+    color_primaries?: string;
+    color_space?: string;
+    side_data_list?: { rotation?: number }[];
+    tags?: { rotate?: string };
+  };
+  const json = JSON.parse(res.stdout) as { format?: { duration?: string }; streams?: Stream[] };
+  const streams = json.streams ?? [];
+  // imagens anexadas (capa) também aparecem como vídeo; o primeiro stream com dimensões é o vídeo
+  const video = streams.find((s) => s.codec_type === "video" && s.width && s.height && s.codec_name !== "mjpeg");
+  const duration = Number(json.format?.duration);
+  if (!video || !video.width || !video.height) {
+    throw new EngineError("unreadable_clip", `O arquivo não contém vídeo: ${file}`);
+  }
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new EngineError("unreadable_clip", `Não foi possível obter a duração do clipe: ${file}`);
+  }
+  const rawRotation =
+    video.side_data_list?.find((d) => typeof d.rotation === "number")?.rotation ??
+    (video.tags?.rotate !== undefined ? Number(video.tags.rotate) : 0);
+  const rotation = ((Math.round(rawRotation / 90) * 90) % 360 + 360) % 360;
+  const sar = /^(\d+):(\d+)$/.exec(video.sample_aspect_ratio ?? "");
+  const sampleAspect = sar && Number(sar[1]) > 0 && Number(sar[2]) > 0 ? Number(sar[1]) / Number(sar[2]) : 1;
+  const tag = (v?: string) => (v && v !== "unknown" && v !== "unspecified" ? v : undefined);
+  return {
+    duration,
+    width: video.width,
+    height: video.height,
+    rotation,
+    sampleAspect,
+    hasAudio: streams.some((s) => s.codec_type === "audio"),
+    codec: video.codec_name ?? "desconhecido",
+    pixFmt: video.pix_fmt ?? "desconhecido",
+    colorTransfer: tag(video.color_transfer),
+    colorPrimaries: tag(video.color_primaries),
+    colorSpace: tag(video.color_space),
+  };
+}
+
+/** Filtros do FFmpeg presentes no binário instalado (consulta única, guardada em memória). */
+let filtersCache: Promise<Set<string>> | undefined;
+export function availableFilters(): Promise<Set<string>> {
+  filtersCache ??= runFfmpeg(["-hide_banner", "-filters"]).then(
+    (res) =>
+      new Set(
+        res.stdout
+          .split("\n")
+          .map((l) => l.trim().split(/\s+/)[1])
+          .filter((name): name is string => Boolean(name)),
+      ),
+  );
+  return filtersCache;
+}
+
 export interface BenchStats {
   /** Tempo de CPU em modo usuário (soma de todos os núcleos), em segundos. */
   cpuUserSeconds?: number;

@@ -19,6 +19,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `transitions.ts`: as 58 transições do xfade, rodízio e sorteio com semente; confere o que o FFmpeg instalado suporta.
   - `timing.ts`: trecho de áudio e duração proporcional, com cartões de logo.
   - `prepare.ts`: normalização de fotos (EXIF, enquadramento, foco), cartões e marca d'água, com sharp.
+  - `clip.ts`: trecho, rotação, HDR para SDR e ramo de vídeo dos clipes (enquadramento feito no FFmpeg).
   - `filters.ts`, `text.ts`, `filtergraph.ts`: tradução do preset para o filter_complex.
   - `render.ts`: orquestra tudo e executa o FFmpeg. `cli/`: ferramenta de amostras e servidor de medição.
 - `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais. LUTs em `presets/luts/`.
@@ -27,9 +28,10 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 
 ## Regras do motor
 
-- Entrada: lista de **itens** (`photo`; `clip` entra na Fase 1C), logos por papel (`brand`, `partner`), título e áudio.
+- Entrada: lista de **itens** (`photo` ou `clip`), logos por papel (`brand`, `partner`), título e áudio.
+- Clipes: duração própria (o trecho pedido, nunca esticado); as fotos dividem o resto. Sem fotos, o vídeo dura a soma dos clipes. Som original mudo por padrão; com `keepAudio` entra na mixagem e a música abaixa (`audio.clipDucking`). HDR (PQ/HLG) é convertido com zscale + tonemap mobius. Limites: 10 clipes, trecho mínimo de 1 s, até 4K.
 - O preset define **como** a logo aparece; a requisição envia **qual**. Papel pedido e não enviado: o espaço é ignorado, com aviso.
-- Linha do tempo: cartão de abertura, itens (com cartões intercalados) e cartão de encerramento. Cartões têm duração fixa; as fotos dividem o resto. Passagens que tocam um cartão são sempre `fade`.
+- Linha do tempo: cartão de abertura, itens (com cartões intercalados) e cartão de encerramento. Cartões e clipes têm duração fixa; as fotos dividem o resto. Passagens que tocam um cartão são sempre `fade`.
 - Tudo é quantizado em quadros; a duração final é exata.
 - Fotos demais para a duração: erro `too_many_photos` informando o máximo. Nunca descartar fotos em silêncio.
 - Enquadramento `auto`: usa `contain` (fundo desfocado) quando o corte removeria mais que `autoThreshold` da foto; um `focus` informado força o corte.
@@ -41,12 +43,11 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 ## Fases
 
 0. Spike: concluída.
-1A. Motor base (esta): schema, herança, efeitos do catálogo, logos, texto, enquadramento, zonas seguras, loop de áudio.
-★ Marco de presets: criação dos presets por nicho (o dono envia referências; aprovação por vídeo de amostra).
-1B. Biblioteca de presets, em paralelo com as fases seguintes.
-1C. Clipes de vídeo na montagem (som original opcional, HDR, limites).
-2. API: endpoints, fila, API key, webhook, `/v1/previews`, limpeza por TTL.
+1A. Motor base: concluída.
+1C. Clipes de vídeo (esta): som original opcional, HDR, rotação, limites.
+2. API: endpoints, fila, API key, webhook, `/v1/previews`, biblioteca de áudio, limpeza por TTL.
 3. Site: upload, seletor de trecho com forma de onda, editor visual de presets (exporta JSON).
+★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
 
 ## Pendências conhecidas
@@ -55,6 +56,8 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Otimização de memória adiada por decisão do dono (reduzir o supersample).
 - Durações máximas e zonas seguras das plataformas mudam com frequência; revisar `platforms.ts` periodicamente.
 - Texto com várias linhas fica alinhado à esquerda dentro do bloco centralizado.
+- HDR testado só com clipes sintéticos (PQ e HLG); falta um clipe real de iPhone (HLG com Dolby Vision).
+- Limites de upload de clipes (tamanho do arquivo) são da API: proposta de 200 MB por clipe, a confirmar na Fase 2.
 - `cli/spike-server.ts` e o `CMD` do Dockerfile são temporários; saem na Fase 2.
 
 ## Comandos

@@ -10,8 +10,10 @@
  *   GET /spike/result?token=...      -> estado e medições do último render assíncrono
  *   GET /spike/info?token=...        -> versão do FFmpeg e transições disponíveis no container
  *
- * Parâmetros opcionais de /spike: threads (limite de threads do FFmpeg), x264 (preset do x264), photos (1-30), duration (5-180 s).
+ * Parâmetros opcionais de /spike: threads (limite de threads do FFmpeg), x264 (preset do x264), photos (0-30),
+ * clips (0-10, trechos de 3 s intercalados: paisagem com som, retrato com rotação e HDR), duration (5-180 s).
  * Pior caso da Fase 1A: /spike?token=...&photos=30&duration=60
+ * Com clipes (Fase 1C): /spike?token=...&photos=10&clips=6&duration=45
  * Sem a variável SPIKE_TOKEN definida, as rotas /spike ficam desativadas.
  */
 import { timingSafeEqual } from "node:crypto";
@@ -25,7 +27,8 @@ import { getPlatform } from "../platforms.js";
 import { loadPreset } from "../preset.js";
 import { defaultThreads, renderVideo } from "../render.js";
 import { makeTestAssets } from "./make-test-assets.js";
-import { runFfmpeg } from "../ffmpeg.js";
+import { availableFilters, runFfmpeg } from "../ffmpeg.js";
+import type { RenderItem } from "../render.js";
 import { ALL_TRANSITIONS, supportedTransitions } from "../transitions.js";
 import { ENGINE_ASSETS, OUT_DIR, PRESETS_DIR } from "./paths.js";
 
@@ -65,20 +68,31 @@ const server = createServer(async (req, res) => {
       if (busy) return json(res, 429, { error: "busy", message: "Já existe um render em andamento" });
       const x264 = url.searchParams.get("x264") ?? "medium";
       if (!X264_PRESETS.has(x264)) return json(res, 400, { error: "invalid_x264_preset" });
-      const photoCount = Math.min(30, Math.max(1, Number(url.searchParams.get("photos") ?? 6) || 6));
+      const clipCount = Math.min(10, Math.max(0, Math.trunc(Number(url.searchParams.get("clips") ?? 0)) || 0));
+      const photosParam = Number(url.searchParams.get("photos") ?? 6);
+      const photoCount = Math.min(30 - clipCount, Math.max(clipCount > 0 ? 0 : 1, Number.isFinite(photosParam) ? Math.trunc(photosParam) : 6));
       const duration = Math.min(180, Math.max(5, Number(url.searchParams.get("duration") ?? 15) || 15));
       const threadsParam = url.searchParams.get("threads");
       const threads = threadsParam ? Math.min(64, Math.max(1, Math.trunc(Number(threadsParam)) || 1)) : undefined;
 
-      const params = { photos: photoCount, duration, x264, threads: threads ?? defaultThreads() };
+      const params = { photos: photoCount, clips: clipCount, duration, x264, threads: threads ?? defaultThreads() };
       const run = async () => {
         const assets = await makeTestAssets();
+        // repete as 6 imagens de teste até completar a quantidade pedida
+        const items: RenderItem[] = Array.from({ length: photoCount }, (_, i) => ({
+          type: "photo" as const,
+          file: assets.photos[i % assets.photos.length]!,
+        }));
+        // clipes de 3 s intercalados entre as fotos, alternando os três tipos de teste
+        const kinds = [assets.clips.landscape, assets.clips.rotated, assets.clips.hdr ?? assets.clips.landscape];
+        for (let c = 0; c < clipCount; c++) {
+          const file = kinds[c % kinds.length]!;
+          const clip: RenderItem = { type: "clip", file, start: 1, duration: 3, keepAudio: file === assets.clips.landscape };
+          const at = Math.round(((c + 1) * items.length) / (clipCount + 1)) + c;
+          items.splice(Math.min(at, items.length), 0, clip);
+        }
         const result = await renderVideo({
-          // repete as 6 imagens de teste até completar a quantidade pedida
-          items: Array.from({ length: photoCount }, (_, i) => ({
-            type: "photo" as const,
-            file: assets.photos[i % assets.photos.length]!,
-          })),
+          items,
           preset: await loadPreset(join(PRESETS_DIR, "limpo.json")),
           platform: getPlatform("instagram_reels"),
           output: OUTPUT,
@@ -92,7 +106,8 @@ const server = createServer(async (req, res) => {
           machine: { cpus: availableParallelism(), memoryMb: Math.round(totalmem() / 1024 / 1024) },
           x264Preset: x264,
           duration: result.duration,
-          photoCount: result.itemCount,
+          itemCount: result.itemCount,
+          clips: result.clips,
           stats: result.stats,
           warnings: result.warnings,
         };
@@ -132,14 +147,16 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/spike/info") {
       const version = (await runFfmpeg(["-hide_banner", "-version"])).stdout.split("\n")[0] ?? "";
+      const filters = await availableFilters();
+      const encoders = (await runFfmpeg(["-hide_banner", "-encoders"])).stdout;
       const supported = await supportedTransitions();
       // Limites do container (cgroup v2), para comparar com o que o Node e o FFmpeg enxergam.
       const cgroup = async (file: string) =>
         (await readFile(`/sys/fs/cgroup/${file}`, "utf8").catch(() => "indisponível")).trim();
-      const encoders = (await runFfmpeg(["-hide_banner", "-h", "encoder=libx264"])).stdout.split("\n")[0] ?? "";
+      const x264 = (await runFfmpeg(["-hide_banner", "-h", "encoder=libx264"])).stdout.split("\n")[0] ?? "";
       return json(res, 200, {
         ffmpeg: version,
-        x264: encoders,
+        x264,
         machine: {
           availableParallelism: availableParallelism(),
           cpusVisible: cpus().length,
@@ -152,6 +169,12 @@ const server = createServer(async (req, res) => {
           available: ALL_TRANSITIONS.filter((t) => supported.has(t)).length,
           expected: ALL_TRANSITIONS.length,
           missing: ALL_TRANSITIONS.filter((t) => !supported.has(t)),
+        },
+        // conversão de HDR para SDR exige zscale e tonemap; libx265 só serve para gerar o clipe HDR de teste
+        hdr: {
+          zscale: filters.has("zscale"),
+          tonemap: filters.has("tonemap"),
+          libx265: /\blibx265\b/.test(encoders),
         },
       });
     }

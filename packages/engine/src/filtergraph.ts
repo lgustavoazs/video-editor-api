@@ -1,3 +1,4 @@
+import { clipVideoParts, type ClipVideoInput } from "./clip.js";
 import { n, photoFilterToFfmpeg, quote, type FilterContext } from "./filters.js";
 import type { PlatformProfile } from "./platforms.js";
 import type { Focus } from "./prepare.js";
@@ -23,8 +24,18 @@ export interface CardSegment {
   caption?: { textFile: string; y: number; color: string };
 }
 
+export interface ClipSegment {
+  kind: "clip";
+  frames: number;
+  video: Omit<ClipVideoInput, "index" | "frames">;
+  /** Arquivo com a legenda já quebrada em linhas. */
+  captionFile?: string;
+  /** Presente quando o som original do clipe entra na mixagem. */
+  audio?: { volume: number };
+}
+
 /** Um trecho da linha do tempo. O índice na lista é o índice do input no FFmpeg. */
-export type Segment = PhotoSegment | CardSegment;
+export type Segment = PhotoSegment | CardSegment | ClipSegment;
 
 /** Zoom inicial e final de uma foto, considerando a direção do preset. */
 export function zoomRange(motion: Preset["motion"], photoIndex: number): { from: number; to: number } {
@@ -42,7 +53,7 @@ export function panDirection(motion: Preset["motion"], photoIndex: number): PanD
   return motion.pan;
 }
 
-function zoompan(segment: Segment, width: number, height: number, fps: number): string {
+function zoompan(segment: PhotoSegment | CardSegment, width: number, height: number, fps: number): string {
   const frames = segment.frames;
   if (segment.kind === "card") {
     return `zoompan=z=1:x=0:y=0:d=${frames}:s=${width}x${height}:fps=${fps}`;
@@ -120,6 +131,26 @@ export function buildFiltergraph(input: FiltergraphInput): Filtergraph {
   const photoFilters = preset.photo.filters.flatMap((f) => photoFilterToFfmpeg(f, input.filterContext));
 
   segments.forEach((segment, i) => {
+    if (segment.kind === "clip") {
+      const clip = clipVideoParts({ index: i, frames: segment.frames, ...segment.video }, preset.photo, width, height, fps);
+      parts.push(...clip.parts);
+      const chain = [...photoFilters];
+      if (segment.captionFile && preset.text?.caption) {
+        chain.push(
+          drawText({ style: preset.text.caption, layout, textFile: segment.captionFile, fontsDir: input.fontsDir }),
+        );
+      }
+      // repete o último quadro se o arquivo tiver um quadro a menos e corta na contagem exata
+      chain.push(
+        "format=yuv420p",
+        "setsar=1",
+        "tpad=stop_mode=clone:stop_duration=1",
+        `trim=end_frame=${segment.frames}`,
+        "setpts=PTS-STARTPTS",
+      );
+      parts.push(`[${clip.label}]${chain.join(",")}[v${i}]`);
+      return;
+    }
     const chain = [zoompan(segment, width, height, fps)];
     if (segment.kind === "photo") {
       chain.push(...photoFilters);
@@ -200,10 +231,22 @@ export function buildFiltergraph(input: FiltergraphInput): Filtergraph {
     videoLabel = "vwm";
   }
 
+  // Início de cada segmento na linha do tempo (s): o anterior termina, menos a sobreposição.
+  const starts: number[] = [];
+  let startFrame = 0;
+  for (const segment of segments) {
+    starts.push(startFrame / fps);
+    startFrame += segment.frames - input.transitionFrames;
+  }
+  const transitionSeconds = input.transitionFrames / fps;
+  const clipAudio = segments.flatMap((s, i) =>
+    s.kind === "clip" && s.audio ? [{ index: i, volume: s.audio.volume, start: starts[i]!, length: s.frames / fps }] : [],
+  );
+
   let audioLabel: string | undefined;
+  const total = input.total;
   if (input.audio) {
     const { inputIndex, start, segmentLength, loop } = input.audio;
-    const total = input.total;
     const used = Math.min(segmentLength, total);
     const needsLoop = loop && segmentLength < total - 1e-6;
     const audible = needsLoop ? total : used;
@@ -230,10 +273,53 @@ export function buildFiltergraph(input: FiltergraphInput): Filtergraph {
     if (fadeIn > 0) chain.push(`afade=t=in:st=0:d=${n(fadeIn, 6)}`);
     if (fadeOut > 0) chain.push(`afade=t=out:st=${n(audible - fadeOut, 6)}:d=${n(fadeOut, 6)}`);
     if (preset.audio.volume !== 1) chain.push(`volume=${n(preset.audio.volume)}`);
+    const ducking = preset.audio.clipDucking;
+    if (clipAudio.length > 0 && ducking < 1) {
+      // abaixa a música enquanto toca o som de um clipe, com rampa para não dar salto
+      const ramp = Math.max(0.25, transitionSeconds);
+      const windows = clipAudio
+        .map((c) => `clip(min((t-${n(c.start, 4)})/${n(ramp, 3)},(${n(c.start + c.length, 4)}-t)/${n(ramp, 3)}),0,1)`)
+        .join("+");
+      chain.push(`volume=${quote(`1-${n(1 - ducking, 3)}*min(1,${windows})`)}:eval=frame`);
+    }
     // completa com silêncio até a duração exata do vídeo (diferenças de arredondamento de quadro)
     chain.push(`apad=whole_dur=${n(total, 6)}`);
-    audioLabel = "aout";
+    audioLabel = clipAudio.length > 0 ? "amus" : "aout";
     parts.push(`[${inputIndex}:a]${chain.join(",")}[${audioLabel}]`);
+  } else if (clipAudio.length > 0) {
+    // sem música: base de silêncio com a duração do vídeo, para o som dos clipes entrar no ponto certo
+    audioLabel = "amus";
+    parts.push(`anullsrc=r=48000:cl=stereo,atrim=end=${n(total, 6)}[${audioLabel}]`);
+  }
+
+  if (clipAudio.length > 0) {
+    const labels: string[] = [];
+    for (const c of clipAudio) {
+      const last = c.index === segments.length - 1;
+      // entra e sai junto com a transição de vídeo; sem transição, um fade curto evita estalo
+      const fadeIn = c.index === 0 ? 0.02 : Math.max(0.02, transitionSeconds);
+      const fadeOut = last ? 0.02 : Math.max(0.02, transitionSeconds);
+      const delay = Math.round(c.start * 1000);
+      const chain = [
+        `atrim=end=${n(c.length, 6)}`,
+        "asetpts=PTS-STARTPTS",
+        "aresample=48000",
+        "aformat=sample_fmts=fltp:channel_layouts=stereo",
+        `volume=${n(c.volume, 3)}`,
+        `afade=t=in:st=0:d=${n(fadeIn, 4)}`,
+        `afade=t=out:st=${n(Math.max(0, c.length - fadeOut), 4)}:d=${n(fadeOut, 4)}`,
+      ];
+      if (delay > 0) chain.push(`adelay=delays=${delay}:all=1`);
+      const label = `ac${c.index}`;
+      parts.push(`[${c.index}:a]${chain.join(",")}[${label}]`);
+      labels.push(`[${label}]`);
+    }
+    // soma sem normalizar (cada fonte mantém o volume) e limita picos para não distorcer
+    parts.push(
+      `[${audioLabel}]${labels.join("")}amix=inputs=${labels.length + 1}:duration=first:normalize=0:dropout_transition=0,` +
+        `alimiter=limit=0.97:level=false,atrim=end=${n(total, 6)}[aout]`,
+    );
+    audioLabel = "aout";
   }
 
   return { graph: parts.join(";"), videoLabel, audioLabel };

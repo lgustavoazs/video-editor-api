@@ -92,6 +92,8 @@ export interface TimingInput {
   segment?: AudioSegment;
   /** Duração (s) de cada cartão de logo que entra na linha do tempo. */
   cards?: number[];
+  /** Duração (s) do trecho usado de cada clipe de vídeo, na ordem da linha do tempo. */
+  clips?: number[];
 }
 
 export interface TimingResult {
@@ -102,6 +104,8 @@ export interface TimingResult {
   photoFrames: number[];
   /** Quadros de cada cartão, na ordem recebida. */
   cardFrames: number[];
+  /** Quadros de cada clipe, na ordem recebida. */
+  clipFrames: number[];
   transitionFrames: number;
   /** Tempo médio em que cada foto fica visível sem estar em transição. */
   visiblePerPhoto: number;
@@ -111,24 +115,70 @@ export interface TimingResult {
 /**
  * Regra de duração proporcional (seção 9 do documento de projeto).
  *
- * A linha do tempo tem S segmentos (N fotos + K cartões) unidos por S-1 transições
- * de t segundos, que se sobrepõem. Os cartões têm duração fixa C (soma); as fotos
- * dividem o resto: cada uma dura d = (T + (S-1)·t - C) / N, e fica visível d - t.
+ * A linha do tempo tem S segmentos (N fotos + K cartões e clipes) unidos por S-1
+ * transições de t segundos, que se sobrepõem. Cartões e clipes têm duração fixa
+ * C (soma); as fotos dividem o resto: cada uma dura d = (T + (S-1)·t - C) / N,
+ * e fica visível d - t.
+ *
+ * Sem fotos, a duração do vídeo é a soma dos clipes e cartões (menos as transições).
  */
 export function computeTiming(input: TimingInput): TimingResult {
   const { photoCount: n, fps, perPhotoMin, perPhotoMax, maxDuration, mode, segment } = input;
-  if (!Number.isInteger(n) || n < 1) {
-    throw new EngineError("no_photos", "Informe ao menos uma foto");
+  const cards = input.cards ?? [];
+  const clips = input.clips ?? [];
+  if (!Number.isInteger(n) || n < 0 || n + clips.length < 1) {
+    throw new EngineError("no_photos", "Informe ao menos um item (foto ou clipe)");
   }
   const warnings: string[] = [];
-  const cards = input.cards ?? [];
-  const k = cards.length;
+  const k = cards.length + clips.length;
   const segments = n + k;
   const t = segments > 1 ? input.transition : 0;
   const transitionFrames = Math.round(t * fps);
-  // Um cartão precisa caber entre duas transições.
-  const cardFrames = cards.map((c) => Math.max(Math.round(c * fps), 2 * transitionFrames + 1));
-  const cardsTotal = cardFrames.reduce((a, b) => a + b, 0) / fps;
+  // Cada segmento precisa caber entre duas transições.
+  const minSegmentFrames = 2 * transitionFrames + 1;
+  const cardFrames = cards.map((c) => Math.max(Math.round(c * fps), minSegmentFrames));
+  // Clipes não são esticados: quadros a mais não existem no arquivo.
+  const clipFrames = clips.map((c, i) => {
+    const frames = Math.floor(c * fps + 1e-6);
+    if (frames < minSegmentFrames) {
+      const minimum = Math.ceil((minSegmentFrames / fps) * 100) / 100;
+      throw new EngineError(
+        "clip_too_short",
+        `O clipe ${i + 1} tem ${c.toFixed(2)} s; com transições de ${t} s, o mínimo é ${minimum} s.`,
+        { clip: i, length: c, minimum },
+      );
+    }
+    return frames;
+  });
+  const fixedFrames = [...cardFrames, ...clipFrames].reduce((a, b) => a + b, 0);
+  const fixedTotal = fixedFrames / fps;
+
+  // Só clipes (e cartões): a duração é a deles.
+  if (n === 0) {
+    const totalFrames = fixedFrames - (segments - 1) * transitionFrames;
+    const total = totalFrames / fps;
+    if (total > maxDuration + 1e-6) {
+      throw new EngineError(
+        "video_too_long",
+        `Os clipes e cartões somam ${total.toFixed(2)} s; o máximo da plataforma é ${maxDuration} s.`,
+        { total, maxDuration },
+      );
+    }
+    if (mode === "audio" && !segment) {
+      throw new EngineError("audio_required", 'O modo de duração "audio" exige uma faixa de áudio');
+    }
+    if (mode === "fixed" && input.requestedTotal !== undefined && Math.abs(input.requestedTotal - total) > 1 / fps) {
+      warnings.push(`Sem fotos, a duração é a soma dos clipes e cartões: ${total.toFixed(2)} s.`);
+    }
+    if (segment && segment.length < total - 1e-6 && !segment.loop) {
+      throw new EngineError(
+        "audio_segment_too_short",
+        "O trecho de áudio é mais curto que os clipes. Aumente o trecho ou use loop.",
+        { segmentLength: segment.length, requestedTotal: total },
+      );
+    }
+    return { total, totalFrames, photoFrames: [], cardFrames, clipFrames, transitionFrames, visiblePerPhoto: 0, warnings };
+  }
 
   let total: number;
   if (mode === "audio") {
@@ -162,8 +212,8 @@ export function computeTiming(input: TimingInput): TimingResult {
     }
   }
 
-  // Tempo visível por foto: (T + (K-1)·t - C) / N. Sem cartões, vira (T - t) / N.
-  const available = total + (k - 1) * t - cardsTotal;
+  // Tempo visível por foto: (T + (K-1)·t - C) / N. Sem cartões e clipes, vira (T - t) / N.
+  const available = total + (k - 1) * t - fixedTotal;
   let visible = available / n;
   if (visible < perPhotoMin - 1e-6) {
     const maxPhotos = Math.max(0, Math.floor(available / perPhotoMin + 1e-6));
@@ -171,12 +221,12 @@ export function computeTiming(input: TimingInput): TimingResult {
     throw new EngineError(
       "too_many_photos",
       `Fotos demais para ${total.toFixed(2)} s: cada foto ficaria visível por menos de ${perPhotoMin} s` +
-        (k > 0 ? ` (os cartões de logo ocupam ${cardsTotal.toFixed(2)} s).` : "."),
+        (k > 0 ? ` (cartões e clipes ocupam ${fixedTotal.toFixed(2)} s).` : "."),
       { photoCount: n, maxPhotos, total, missingSeconds: Math.round(missing * 100) / 100 },
     );
   }
   if (visible > perPhotoMax + 1e-6) {
-    const reduced = n * perPhotoMax - (k - 1) * t + cardsTotal;
+    const reduced = n * perPhotoMax - (k - 1) * t + fixedTotal;
     warnings.push(
       `Poucas fotos para ${total.toFixed(2)} s: a duração foi reduzida para ${reduced.toFixed(2)} s ` +
         `(máximo de ${perPhotoMax} s por foto).`,
@@ -187,13 +237,11 @@ export function computeTiming(input: TimingInput): TimingResult {
 
   // Quantiza em quadros. O total é fixado primeiro e o resto da divisão é distribuído
   // entre as primeiras fotos, para a duração final bater com a pedida.
-  const cardFramesTotal = cardFrames.reduce((a, b) => a + b, 0);
-  const minPhotoFrames = 2 * transitionFrames + 1;
   const totalFrames = Math.max(
-    n * minPhotoFrames + cardFramesTotal - (segments - 1) * transitionFrames,
+    n * minSegmentFrames + fixedFrames - (segments - 1) * transitionFrames,
     Math.round(total * fps),
   );
-  const framesToSplit = totalFrames + (segments - 1) * transitionFrames - cardFramesTotal;
+  const framesToSplit = totalFrames + (segments - 1) * transitionFrames - fixedFrames;
   const baseFrames = Math.floor(framesToSplit / n);
   const remainder = framesToSplit - baseFrames * n;
   const photoFrames = Array.from({ length: n }, (_, i) => baseFrames + (i < remainder ? 1 : 0));
@@ -203,6 +251,7 @@ export function computeTiming(input: TimingInput): TimingResult {
     totalFrames,
     photoFrames,
     cardFrames,
+    clipFrames,
     transitionFrames,
     visiblePerPhoto: baseFrames / fps - transitionFrames / fps,
     warnings,
