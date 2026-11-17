@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { Ajv, type ErrorObject } from "ajv";
@@ -175,6 +175,15 @@ async function readJson(file: string): Promise<unknown> {
   } catch (err) {
     throw new EngineError("invalid_preset", `Não foi possível ler o preset "${file}": ${(err as Error).message}`);
   }
+}
+
+/** Ids dos presets de uma pasta (arquivos .json), em ordem alfabética. */
+export async function listPresetFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir);
+  return entries
+    .filter((f) => f.endsWith(".json") && /^[a-z0-9-]+\.json$/.test(f))
+    .map((f) => f.slice(0, -5))
+    .sort();
 }
 
 export async function loadPreset(file: string, options: LoadPresetOptions = {}): Promise<Preset> {

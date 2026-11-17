@@ -10,8 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "assets": "tsx src/cli/make-test-assets.ts",
-    "sample": "tsx src/cli/sample.ts",
-    "spike": "tsx src/cli/spike-server.ts"
+    "sample": "tsx src/cli/sample.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",

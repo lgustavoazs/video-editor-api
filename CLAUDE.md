@@ -21,10 +21,16 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `prepare.ts`: normalização de fotos (EXIF, enquadramento, foco), cartões e marca d'água, com sharp.
   - `clip.ts`: trecho, rotação, HDR para SDR e ramo de vídeo dos clipes (enquadramento feito no FFmpeg).
   - `filters.ts`, `text.ts`, `filtergraph.ts`: tradução do preset para o filter_complex.
-  - `render.ts`: orquestra tudo e executa o FFmpeg. `cli/`: ferramenta de amostras e servidor de medição.
+  - `render.ts`: `planRender` (valida, sonda e calcula a linha do tempo, sem renderizar) e `renderVideo` (executa o FFmpeg, com progresso via `-progress pipe:1`). `cli/`: ferramenta de amostras e arquivos de teste.
+- `apps/api/src` (Fase 2A):
+  - `app.ts`: rotas Fastify (`/v1/videos`, `/v1/presets`, `/v1/platforms`, `/v1/admin/*`) e o `submit` (valida, planeja, enfileira).
+  - `upload.ts` + `sniff.ts`: multipart gravado direto no disco; tipo pelo conteúdo (assinatura), limites por tipo; HEIC recusado com 415.
+  - `options.ts`: JSON Schema do campo `options` (mensagens em português). `presets.ts`: biblioteca em memória e `overrides` (lista branca, revalidada pelo schema do preset).
+  - `jobs.ts`: fila em processo (um render por vez), recuperação após reinício, limpeza por TTL. `db.ts`: SQLite (`node:sqlite`) em `DATA_DIR`.
+  - `keys.ts`: chaves `vea_...` guardadas como sha256, limite por minuto. `errors.ts`: formato único de erro e mapeamento dos códigos do motor (regra = 422, servidor = 500).
 - `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais. LUTs em `presets/luts/`.
 - `assets/fonts`: fontes DejaVu (licença livre) para o texto renderizar igual em qualquer máquina.
-- Planejado: `apps/api` (Fastify + fila, na Railway) e `apps/web` (Next.js com editor visual de presets, na Vercel).
+- Planejado: `apps/web` (Next.js com editor visual de presets, na Vercel).
 
 ## Regras do motor
 
@@ -37,15 +43,16 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 - Enquadramento `auto`: usa `contain` (fundo desfocado) quando o corte removeria mais que `autoThreshold` da foto; um `focus` informado força o corte.
 - Texto e marca d'água respeitam a zona segura da plataforma (`platforms.ts`). A marca d'água não aparece sobre os cartões.
 - Trecho do áudio: `start` + (`end` ou `duration`, mutuamente exclusivos); corte com recodificação; `loop` repete o trecho.
-- Erros de regra usam `EngineError` com `code` estável (a API vai mapear para 4xx).
+- Erros de regra usam `EngineError` com `code` estável (a API devolve 422 para regras e 500 para falhas do servidor).
 - Texto do usuário nunca entra no filtergraph: vai por arquivo (`textfile`).
 
 ## Fases
 
 0. Spike: concluída.
 1A. Motor base: concluída.
-1C. Clipes de vídeo (esta): som original opcional, HDR, rotação, limites.
-2. API: endpoints, fila, API key, webhook, `/v1/previews`, biblioteca de áudio, limpeza por TTL.
+1C. Clipes de vídeo: concluída.
+2A. API (esta): upload, fila, chaves, consulta e download, administração, limpeza por TTL.
+2B. API: webhook (HMAC), `/v1/previews`, biblioteca de áudio (id ou mood), OpenAPI em `/docs`.
 3. Site: upload, seletor de trecho com forma de onda, editor visual de presets (exporta JSON).
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
@@ -57,8 +64,9 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Durações máximas e zonas seguras das plataformas mudam com frequência; revisar `platforms.ts` periodicamente.
 - Texto com várias linhas fica alinhado à esquerda dentro do bloco centralizado.
 - HDR testado só com clipes sintéticos (PQ e HLG); falta um clipe real de iPhone (HLG com Dolby Vision).
-- Limites de upload de clipes (tamanho do arquivo) são da API: proposta de 200 MB por clipe, a confirmar na Fase 2.
-- `cli/spike-server.ts` e o `CMD` do Dockerfile são temporários; saem na Fase 2.
+- Fotos HEIC (padrão do iPhone) são recusadas com 415: o sharp pré-compilado não lê HEIC. Avaliar conversão no futuro.
+- Fila e limite por minuto ficam em memória: valem para uma instância só (suficiente na V1).
+- As chaves de teste que passaram pelo chat (token do spike e a `ADMIN_KEY` inicial) devem ser trocadas antes do uso público.
 
 ## Comandos
 
@@ -66,4 +74,5 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 npm install && npm run assets
 npm run sample -- --audio assets/test/tone.wav --start 5 --duration 15
 npm test && npm run typecheck
+DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api
 ```
