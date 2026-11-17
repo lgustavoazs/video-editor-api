@@ -169,7 +169,7 @@ test("filtergraph: clipe com som entra na mixagem, abaixa a música e é cortado
   });
   // vídeo do clipe: sem zoompan, cortado em 120 quadros
   assert.equal((g.graph.match(/zoompan=/g) ?? []).length, 2);
-  assert.match(g.graph, /tpad=stop_mode=clone:stop_duration=1,trim=end_frame=120,setpts=PTS-STARTPTS\[v1\]/);
+  assert.match(g.graph, /tpad=stop_mode=clone:stop_duration=1,trim=end_frame=120,setpts=PTS-STARTPTS,fps=30\[v1\]/);
   // som do clipe: começa em (100 - 18) / 30 = 2,733 s
   assert.match(g.graph, /\[1:a\]atrim=end=4,.*volume=0\.8,.*adelay=delays=2733:all=1\[ac1\]/);
   // música abaixada para 0,35 dentro da janela do clipe (padrão do preset)
