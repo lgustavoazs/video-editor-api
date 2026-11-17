@@ -43,20 +43,28 @@ export interface RenderItem extends ClipRangeInput {
   volume?: number;
 }
 
-export interface RenderRequest {
+/** O que o planejamento precisa: tudo do pedido, menos a saída e os ajustes de encode. */
+export interface PlanRequest {
   items: RenderItem[];
   preset: Preset;
   platform: PlatformProfile;
-  output: string;
   timing: { mode: "audio" | "fixed"; total?: number };
   audio?: { file: string } & AudioSegmentInput;
   logos?: { role: LogoRole; file: string }[];
   title?: string;
   /** Pastas de recursos do motor. */
   assets: { lutsDir: string; fontsDir: string };
+}
+
+export interface RenderRequest extends PlanRequest {
+  output: string;
   /** Ajustes de encode, usados em medições. */
   /** `threads` limita as threads de filtros e do codificador (padrão: `defaultThreads()`). */
   encode?: { x264Preset?: string; crf?: number; supersample?: number; threads?: number };
+  /** Recebe o progresso de 0 a 1 durante o render. */
+  onProgress?: (fraction: number) => void;
+  /** Plano já calculado por `planRender` (evita sondar os arquivos de novo). */
+  plan?: RenderPlan;
 }
 
 export interface RenderResult {
@@ -86,7 +94,7 @@ export interface RenderResult {
   };
 }
 
-function validateRequest(req: RenderRequest): void {
+function validateRequest(req: PlanRequest): void {
   const count = req.items.length;
   if (count < 1) throw new EngineError("no_photos", "Informe ao menos um item");
   if (count > MAX_ITEMS) {
@@ -181,8 +189,44 @@ export function defaultThreads(): number {
   return Math.max(1, Math.min(8, availableParallelism()));
 }
 
-export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
-  const started = process.hrtime.bigint();
+interface PlannedClip {
+  item: number;
+  info: ClipInfo;
+  start: number;
+  length: number;
+  fit: "cover" | "contain";
+  focus: Focus;
+  hdr: boolean;
+  audio?: { volume: number };
+}
+
+/**
+ * Resultado do planejamento: tudo o que se decide sem processar imagem nem vídeo.
+ * Os campos internos são usados pelo render; o resumo público está em `duration`,
+ * `itemCount` e `warnings`.
+ */
+export interface RenderPlan {
+  duration: number;
+  itemCount: number;
+  warnings: string[];
+  /** @internal */
+  internal: {
+    segment?: ReturnType<typeof resolveAudioSegment>;
+    clipPlans: Map<number, PlannedClip>;
+    logos: Map<LogoRole, string>;
+    cards: ReturnType<typeof planCards>;
+    timing: TimingResult;
+    layout: TextLayout;
+    safeTop: number;
+    safeBottom: number;
+  };
+}
+
+/**
+ * Valida o pedido, sonda áudio e clipes e calcula a linha do tempo, sem renderizar.
+ * Leva menos de um segundo; serve para a API recusar um pedido antes de enfileirá-lo.
+ */
+export async function planRender(req: PlanRequest): Promise<RenderPlan> {
   const { preset, platform } = req;
   const { width: W, height: H, fps } = platform;
   validateRequest(req);
@@ -209,16 +253,6 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
   // 1b. Clipes: sonda cada arquivo, resolve o trecho e decide enquadramento e conversão de cor.
   const filters = await availableFilters();
   const canToneMap = filters.has("zscale") && filters.has("tonemap");
-  interface PlannedClip {
-    item: number;
-    info: ClipInfo;
-    start: number;
-    length: number;
-    fit: "cover" | "contain";
-    focus: Focus;
-    hdr: boolean;
-    audio?: { volume: number };
-  }
   const clipPlans = new Map<number, PlannedClip>();
   for (const [i, item] of req.items.entries()) {
     if (item.type !== "clip") continue;
@@ -270,7 +304,18 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     clips: [...clipPlans.values()].map((c) => c.length),
   });
   warnings.push(...timing.warnings);
-  const cardFrames = [...timing.cardFrames];
+
+  // Avisos que dependem só do pedido e do preset (repetidos no render, onde os textos são gerados).
+  if (req.items.some((item) => item.caption && cleanText(item.caption)) && !preset.text?.caption) {
+    warnings.push("Legendas foram enviadas, mas o preset não define estilo de legenda; elas foram ignoradas.");
+  }
+  if (req.title && cleanText(req.title) && !preset.text?.title) {
+    warnings.push("Um título foi enviado, mas o preset não define estilo de título; ele foi ignorado.");
+  }
+  const wm = preset.branding?.watermark;
+  if (wm && !logos.get(wm.role)) {
+    warnings.push(`O preset usa a logo "${wm.role}" como marca d'água, mas ela não foi enviada.`);
+  }
 
   // Margens para texto e marca d'água: zona segura da plataforma ou barra de cinema, a que for maior.
   const bar = Math.round(preset.letterbox * H);
@@ -283,6 +328,26 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     marginBottom: safeBottom + 0.02 * H,
     marginSide: Math.max(platform.safeZone.left, platform.safeZone.right) * W + 0.03 * W,
   };
+
+  return {
+    duration: timing.total,
+    itemCount: count,
+    warnings,
+    internal: { segment, clipPlans, logos, cards, timing, layout, safeTop, safeBottom },
+  };
+}
+
+export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
+  const started = process.hrtime.bigint();
+  const { preset, platform } = req;
+  const { width: W, height: H, fps } = platform;
+  const plan = req.plan ?? (await planRender(req));
+  const count = plan.itemCount;
+  const warnings = [...plan.warnings];
+  const { segment, clipPlans, logos, cards, timing, layout, safeTop, safeBottom } = plan.internal;
+  const cardFrames = [...timing.cardFrames];
+  const progress = (fraction: number) => req.onProgress?.(Math.max(0, Math.min(1, fraction)));
+  progress(0);
 
   const supersample = req.encode?.supersample ?? 2;
   const workDir = await mkdtemp(join(tmpdir(), "render-"));
@@ -331,8 +396,6 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
       if (caption) {
         if (preset.text?.caption) {
           captionFile = await writeText(wrapText(caption, charsPerLine(preset.text.caption, layout)));
-        } else if (!warnings.some((w) => w.startsWith("Legendas"))) {
-          warnings.push("Legendas foram enviadas, mas o preset não define estilo de legenda; elas foram ignoradas.");
         }
       }
 
@@ -372,6 +435,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
         });
         photoIndex++;
       }
+      progress((0.1 * (i + 1)) / count);
       const isLast = i === count - 1;
       if (cards.between && !isLast && (i + 1) % cards.between.every === 0) await addCard(cards.between);
     }
@@ -390,8 +454,6 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     if (titleText) {
       if (preset.text?.title) {
         title = { textFile: await writeText(wrapText(titleText, charsPerLine(preset.text.title, layout))) };
-      } else {
-        warnings.push("Um título foi enviado, mas o preset não define estilo de título; ele foi ignorado.");
       }
     }
 
@@ -400,9 +462,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     const wm = preset.branding?.watermark;
     if (wm) {
       const logoFile = logos.get(wm.role);
-      if (!logoFile) {
-        warnings.push(`O preset usa a logo "${wm.role}" como marca d'água, mas ela não foi enviada.`);
-      } else {
+      if (logoFile) {
         const file = join(workDir, "marca.png");
         const size = await prepareWatermark(logoFile, file, Math.round(wm.width * W), Math.round(0.25 * H));
         const marginX = wm.margin * W;
@@ -466,7 +526,8 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
         : undefined,
     });
 
-    const args: string[] = ["-hide_banner", "-y", "-benchmark"];
+    // -progress escreve "frame=N" na saída padrão; -nostats deixa o log de erros enxuto
+    const args: string[] = ["-hide_banner", "-y", "-benchmark", "-nostats", "-progress", "pipe:1"];
     // Em containers, o FFmpeg enxerga os núcleos do host (ex.: 48) e não a cota do container
     // (ex.: 8). Com dezenas de entradas isso cria milhares de threads e o codificador não
     // consegue abrir. Por isso o limite é sempre explícito.
@@ -499,7 +560,16 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
     );
 
     await mkdir(dirname(req.output), { recursive: true });
-    const res = await runFfmpeg(args);
+    let pending = "";
+    const res = await runFfmpeg(args, undefined, (chunk) => {
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        const m = /^frame=(\d+)/.exec(line.trim());
+        if (m) progress(0.1 + (0.9 * Number(m[1])) / timing.totalFrames);
+      }
+    });
     if (res.code !== 0) {
       throw new EngineError("render_failed", "O FFmpeg falhou ao renderizar o vídeo", {
         exitCode: res.code,
@@ -507,6 +577,7 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
       });
     }
     const finished = process.hrtime.bigint();
+    progress(1);
 
     const out = await probe(req.output);
     const { size } = await stat(req.output);

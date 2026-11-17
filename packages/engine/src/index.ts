@@ -32,4 +32,17 @@ export { buildFiltergraph } from "./filtergraph.js";
 export { availableFilters, probe, probeClip, type ClipInfo } from "./ffmpeg.js";
 export { MAX_CLIP_SIDE, MAX_CLIPS, MIN_CLIP_SECONDS, resolveClipRange } from "./clip.js";
 export type { Focus } from "./prepare.js";
-export { renderVideo, MAX_ITEMS, type RenderItem, type RenderRequest, type RenderResult } from "./render.js";
+export {
+  defaultThreads,
+  MAX_ITEMS,
+  planRender,
+  renderVideo,
+  type PlanRequest,
+  type RenderItem,
+  type RenderPlan,
+  type RenderRequest,
+  type RenderResult,
+} from "./render.js";
+export { ENGINE_ASSETS, PRESETS_DIR, REPO_ROOT, TEST_ASSETS_DIR } from "./cli/paths.js";
+export { makeTestAssets, type TestClips } from "./cli/make-test-assets.js";
+export { listPresetFiles } from "./preset.js";

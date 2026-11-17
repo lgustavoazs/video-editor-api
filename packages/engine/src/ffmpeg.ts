@@ -15,14 +15,26 @@ const FFPROBE = process.env.FFPROBE_PATH ?? "ffprobe";
  * Executa um binário com array de argumentos (nunca via shell),
  * para que nomes de arquivo e parâmetros não sejam interpretados.
  */
-export function run(command: string, args: string[], timeoutMs = 10 * 60_000): Promise<RunResult> {
+/**
+ * `onStdout` recebe a saída padrão em pedaços, à medida que chega (usado para o progresso do render).
+ */
+export function run(
+  command: string,
+  args: string[],
+  timeoutMs = 10 * 60_000,
+  onStdout?: (chunk: string) => void,
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const started = process.hrtime.bigint();
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    child.stdout.on("data", (d: Buffer) => {
+      const text = d.toString();
+      if (onStdout) onStdout(text);
+      else stdout += text;
+    });
     child.stderr.on("data", (d: Buffer) => {
       stderr += d.toString();
       // mantém só o final do log, que é onde estão os erros e o resumo
@@ -44,8 +56,8 @@ export function run(command: string, args: string[], timeoutMs = 10 * 60_000): P
   });
 }
 
-export function runFfmpeg(args: string[], timeoutMs?: number): Promise<RunResult> {
-  return run(FFMPEG, args, timeoutMs);
+export function runFfmpeg(args: string[], timeoutMs?: number, onStdout?: (chunk: string) => void): Promise<RunResult> {
+  return run(FFMPEG, args, timeoutMs, onStdout);
 }
 
 export interface MediaInfo {

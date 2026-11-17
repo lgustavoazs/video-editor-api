@@ -2,7 +2,7 @@
 
 Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera vídeos curtos com áudio para Instagram, Facebook, TikTok e YouTube Shorts.
 
-**Estado atual: Fase 1C (clipes de vídeo).** O motor renderiza fotos e clipes de vídeo com todos os efeitos do catálogo, logos, texto e trecho de áudio, por linha de comando. A API e o site ainda não existem.
+**Estado atual: Fase 2A (API).** O motor renderiza fotos e clipes de vídeo com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos por upload, enfileira e devolve o vídeo. O site ainda não existe.
 
 ## Estrutura
 
@@ -11,7 +11,8 @@ Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera ví
 | `packages/engine` | Motor: presets, regra de duração, montagem do FFmpeg, ferramentas de linha de comando |
 | `presets/` | Um arquivo JSON por estilo; LUTs em `presets/luts/` |
 | `assets/fonts` | Fontes usadas nos textos |
-| `apps/` | (Fases 2 e 3) API e site |
+| `apps/api` | API HTTP (Fastify), fila e banco SQLite |
+| `scripts/` | `testar-api.ps1`: envia uma pasta de fotos para a API a partir do Windows |
 
 ## Requisitos
 
@@ -86,23 +87,87 @@ Cada estilo é um JSON em `presets/`, validado pelo schema em `packages/engine/s
 
 Exemplos completos em `packages/engine/test/fixtures/`.
 
-## Medição na Railway (Fase 0)
+## API (Fase 2A)
 
-O `Dockerfile` sobe um servidor temporário que renderiza o vídeo de teste e devolve as medições.
+```bash
+npm run build
+DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api   # porta 3000
+```
 
-1. Na Railway: **New Project → Deploy from GitHub repo →** este repositório.
-2. Em **Variables**, crie `SPIKE_TOKEN` com um valor aleatório (sem ele as rotas de teste ficam desativadas).
-3. Em **Settings → Networking**, gere um domínio público.
-4. Acesse:
-   - `https://SEU-DOMINIO/health`
-   - `https://SEU-DOMINIO/spike?token=SEU_TOKEN` (medições em JSON; leva de 10 a 60 s)
-   - `https://SEU-DOMINIO/spike?token=SEU_TOKEN&x264=veryfast` (encode mais rápido)
-   - `https://SEU-DOMINIO/spike?token=SEU_TOKEN&photos=30&duration=60` (pior caso: leva alguns minutos)
-   - `https://SEU-DOMINIO/spike?token=SEU_TOKEN&photos=10&clips=6&duration=45` (com clipes)
-   - Acrescente `&async=1` para iniciar e buscar o resultado depois em `/spike/result?token=SEU_TOKEN`
-   - `https://SEU-DOMINIO/spike/video?token=SEU_TOKEN` (baixa o vídeo gerado)
+### Autenticação
 
-O servidor de teste será removido quando a API entrar (Fase 2). Como o token vai na URL, use um valor descartável.
+- Clientes: `Authorization: Bearer vea_...` (ou `X-API-Key`). O servidor guarda só o hash da chave.
+- Administração: `X-Admin-Key: <ADMIN_KEY>`. Nas rotas GET de administração também vale `?key=` (para conferir pelo navegador; dá para desligar com `ADMIN_QUERY_KEY=false`). A chave nunca aparece nos logs.
+
+### Rotas
+
+| Rota | O que faz |
+|---|---|
+| `POST /v1/videos` | Cria um vídeo (multipart: campo `options` em JSON + arquivos). Responde `202` com o `id` |
+| `GET /v1/videos/:id` | Estado (`queued`, `processing`, `done`, `failed`, `expired`), progresso em %, posição na fila, avisos, erro |
+| `GET /v1/videos/:id/download` | Baixa o MP4 (aceita `Range`). Depois do prazo: `410` |
+| `DELETE /v1/videos/:id` | Cancela (na fila) ou apaga (pronto). Durante o render: `409` |
+| `GET /v1/presets`, `/v1/presets/:id`, `/v1/presets/schema` | Presets disponíveis e o JSON Schema |
+| `GET /v1/platforms` | Perfis de plataforma (tamanho, duração máxima, zona segura) |
+| `GET /health` | Público, para o healthcheck |
+| `POST /v1/admin/keys` `{"name": "..."}` | Cria uma chave de cliente (mostrada uma única vez) |
+| `GET /v1/admin/keys`, `DELETE /v1/admin/keys/:id` | Lista e revoga chaves |
+| `GET /v1/admin/info` | FFmpeg, filtros, CPUs, memória, disco, fila |
+| `GET /v1/admin/selftest?photos=8&clips=2&duration=20` | Gera um vídeo com os arquivos de teste, sem upload |
+| `GET /v1/admin/jobs/:id`, `/v1/admin/jobs/:id/download` | Qualquer pedido, com as medições do render |
+
+### Exemplo
+
+```bash
+curl -X POST https://SEU-DOMINIO/v1/videos -H "Authorization: Bearer vea_..." \
+  -F 'options={"preset":"limpo","platform":"instagram_reels",
+       "items":[{"file":"f1","caption":"Largada"},{"file":"c1","duration":4,"keepAudio":true},{"file":"f2"}],
+       "audio":{"file":"musica","start":"0:32","duration":20},
+       "logos":[{"role":"brand","file":"logo"}],
+       "overrides":{"transition":{"types":["fade","wipeleft"],"order":"random","seed":7}}}' \
+  -F f1=@foto1.jpg -F f2=@foto2.jpg -F c1=@clipe.mp4 -F musica=@musica.mp3 -F logo=@logo.png
+```
+
+- Os arquivos são citados em `options` pelo **nome do campo**. O tipo é identificado pelo conteúdo: imagem vira foto, vídeo vira clipe (`type` é opcional).
+- Sem `audio`, use `"timing":{"mode":"fixed","total":15}`.
+- `overrides` aceita só: `transition` (`type`/`types`, `order`, `seed`, `duration`), `audio` (`volume`, `fadeIn`, `fadeOut`, `clipDucking`) e `photo.fit`. As faixas são as do schema do preset.
+- Limites: foto 15 MB, clipe 200 MB, áudio 20 MB, logo 5 MB, pedido 500 MB, até 30 itens (10 clipes). Fila de até 20 pedidos; um render por vez.
+- Fotos HEIC (padrão do iPhone) ainda não são aceitas: erro `415` pedindo JPEG ou PNG.
+- Erros têm sempre o formato `{"error": {"code", "message", "details"}}`. Regras do motor (fotos demais, trecho fora do áudio...) voltam como `422` **na hora**, antes de entrar na fila.
+- O vídeo fica disponível por 24 h; as entradas são apagadas assim que o render termina.
+- Ainda não disponíveis (Fase 2B): aviso por webhook (`callbackUrl` é guardado), biblioteca de áudio (`libraryId`/`mood`), `/v1/previews` e a documentação OpenAPI.
+
+Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado:
+
+```powershell
+.\scripts\testar-api.ps1 -Url https://SEU-DOMINIO -Chave vea_... -Pasta C:\fotos -Audio C:\musica.mp3 -Inicio 30 -Duracao 20 -Logo C:\logo.png
+```
+
+### Variáveis de ambiente
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `DATA_DIR` | `/data` no Docker | Banco, fila e vídeos. Na Railway, o volume persistente |
+| `ADMIN_KEY` | (nenhuma) | Liga as rotas de administração (mínimo 16 caracteres) |
+| `RAILWAY_RUN_UID` | | `0` na Railway, porque o volume é montado como root |
+| `VIDEO_TTL_HOURS` | 24 | Prazo do vídeo pronto |
+| `QUEUE_MAX` | 20 | Pedidos aguardando |
+| `RATE_LIMIT_PER_MINUTE` / `CREATE_LIMIT_PER_MINUTE` | 300 / 10 | Por chave |
+| `LIMIT_PHOTO_MB`, `LIMIT_CLIP_MB`, `LIMIT_AUDIO_MB`, `LIMIT_LOGO_MB`, `LIMIT_TOTAL_MB` | 15, 200, 20, 5, 500 | Tamanhos de upload |
+| `MIN_FREE_MB` | 1024 | Abaixo disso, novos pedidos recebem `503` |
+| `FFMPEG_THREADS` | núcleos disponíveis (máx. 8) | Limite de threads do FFmpeg |
+| `PUBLIC_URL` | (host da requisição) | Base dos links devolvidos |
+
+## Deploy na Railway
+
+1. Volume persistente montado em `/data`.
+2. Variáveis: `DATA_DIR=/data`, `RAILWAY_RUN_UID=0`, `ADMIN_KEY`.
+3. Conferir: `https://SEU-DOMINIO/v1/admin/info?key=ADMIN_KEY` (`dataDirWritable: true`) e `.../v1/admin/selftest?key=ADMIN_KEY`.
+4. Criar a chave de cliente (no Windows, `curl.exe`):
+
+   ```powershell
+   curl.exe -X POST https://SEU-DOMINIO/v1/admin/keys -H "X-Admin-Key: ADMIN_KEY" -H "Content-Type: application/json" -d '{\"name\":\"gustavo\"}'
+   ```
 
 ## Documento de projeto
 
