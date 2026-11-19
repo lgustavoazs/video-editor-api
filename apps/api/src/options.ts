@@ -20,6 +20,8 @@ export const optionsSchema = {
     platform: { type: "string", maxLength: 64 },
     items: {
       type: "array",
+      description:
+        "Fotos e clipes do vídeo. A ordem desta lista é a ordem em que aparecem no vídeo; o nome dos arquivos e a ordem dos campos no multipart não influem. As logos não entram aqui: vão em `logos`.",
       minItems: 1,
       maxItems: 30,
       items: {
@@ -68,6 +70,8 @@ export const optionsSchema = {
     },
     logos: {
       type: "array",
+      description:
+        "Logos por papel (brand = marca, partner = parceiro). O preset define onde cada papel aparece (marca d'água, cartão de abertura ou encerramento). Uma logo colocada em `items` vira uma foto comum do vídeo.",
       maxItems: 2,
       items: {
         type: "object",

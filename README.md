@@ -133,6 +133,8 @@ curl -X POST https://SEU-DOMINIO/v1/videos -H "Authorization: Bearer vea_..." \
 ```
 
 - Os arquivos são citados em `options` pelo **nome do campo**. O tipo é identificado pelo conteúdo: imagem vira foto, vídeo vira clipe (`type` é opcional).
+- **Ordem:** o vídeo segue a ordem da lista `items`. O nome dos arquivos e a ordem dos campos no multipart não influem; para mudar a ordem, mude a posição na lista.
+- **Logos** vão em `logos`, não em `items`. Uma logo colocada em `items` aparece como uma foto comum.
 - Sem `audio`, use `"timing":{"mode":"fixed","total":15}`.
 - `overrides` aceita só: `transition` (`type`/`types`, `order`, `seed`, `duration`), `audio` (`volume`, `fadeIn`, `fadeOut`, `clipDucking`) e `photo.fit`. As faixas são as do schema do preset.
 - Limites: foto 15 MB, clipe 200 MB, áudio 20 MB, logo 5 MB, pedido 500 MB, até 30 itens (10 clipes). Fila de até 20 pedidos; um render por vez.
@@ -161,7 +163,7 @@ O endereço precisa ser `https://` e público (endereços internos são recusado
 
 `POST /v1/previews`, com a chave de administrador, aceita o mesmo multipart dos vídeos. O `preset` pode ser um id ou o preset inteiro, como o editor exporta (inclusive com `extends`). O resultado sai em 540×960 (metade da plataforma), encode rápido, e é consultado em `/v1/admin/jobs/:id`.
 
-Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado:
+Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado. O script monta `items` com **todas as imagens e vídeos da pasta, em ordem alfabética do nome**. Para controlar a ordem, numere os arquivos com dois dígitos (`01-chegada.jpg`, `02-aquecimento.jpg`...; sem o zero, `10` viria antes de `2`). Deixe a logo fora da pasta e passe com `-Logo`; dentro da pasta ela entraria como foto.
 
 ```powershell
 .\scripts\testar-api.ps1 -Url https://SEU-DOMINIO -Chave vea_... -Pasta C:\fotos -Audio C:\musica.mp3 -Inicio 30 -Duracao 20 -Logo C:\logo.png
