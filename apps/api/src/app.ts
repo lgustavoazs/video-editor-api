@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, stat, statfs } from "node:fs/promises";
@@ -6,6 +7,7 @@ import { availableParallelism, cpus, freemem, totalmem } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   availableFilters,
@@ -27,11 +29,19 @@ import { cleanup, inputDir, jobDir, JobQueue, outputFile, scaledPlatform, type S
 import { createKey, findActiveKey, newWebhookSecret, publicKey, RateLimiter, sameSecret } from "./keys.js";
 import { parseOptions, referencedFiles, type VideoOptions } from "./options.js";
 import { applyOverrides, PresetLibrary } from "./presets.js";
+import {
+  clearSessionCookie,
+  hasSession,
+  issueSession,
+  setSessionCookie,
+  SITE_KEY,
+  siteEnabled,
+} from "./session.js";
 import { checkFile, discard, receiveUpload } from "./upload.js";
 import { checkCallbackUrl, WebhookSender } from "./webhook.js";
 
 const run = promisify(execFile);
-export const API_VERSION = "2B";
+export const API_VERSION = "3A";
 /** Pré-visualização: metade da resolução da plataforma e no máximo 10 s. */
 export const PREVIEW_SCALE = 0.5;
 export const PREVIEW_MAX_SECONDS = 10;
@@ -113,8 +123,9 @@ export async function buildApp(
 
   async function requireKey(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const key = bearer(req);
-    if (!key) throw new ApiError(401, "unauthorized", "Envie a chave da API em Authorization: Bearer <chave>");
-    const row = findActiveKey(db, key);
+    // Sem chave: aceita a sessão do site (cookie), que age como a "chave" interna "site".
+    const row = key ? findActiveKey(db, key) : hasSession(cfg, req) ? SITE_KEY : undefined;
+    if (!key && !row) throw new ApiError(401, "unauthorized", "Envie a chave da API em Authorization: Bearer <chave>");
     if (!row) throw new ApiError(401, "unauthorized", "Chave da API inválida ou revogada");
     const wait = limiter.hit(row.id);
     if (wait) {
@@ -122,7 +133,7 @@ export async function buildApp(
       throw new ApiError(429, "rate_limited", `Limite de requisições atingido. Tente de novo em ${wait} s.`);
     }
     req.apiKey = row;
-    db.touchKey(row.id, Date.now());
+    if (row !== SITE_KEY) db.touchKey(row.id, Date.now());
   }
 
   async function requireAdmin(req: FastifyRequest): Promise<void> {
@@ -432,11 +443,51 @@ export async function buildApp(
 
   app.get("/health", async () => ({ ok: true, version: API_VERSION }));
 
+  // ---------------- sessão do site ----------------
+
+  const loginLimiter = new RateLimiter(5);
+
+  app.get("/v1/session", async (req) => ({ enabled: siteEnabled(cfg), authenticated: hasSession(cfg, req) }));
+
+  app.post<{ Body: { password?: unknown } }>("/v1/session", async (req, reply) => {
+    if (!siteEnabled(cfg)) throw new ApiError(404, "site_disabled", "Login do site desativado (defina SITE_PASSWORD e ADMIN_KEY)");
+    const wait = loginLimiter.hit(`login:${req.ip}`);
+    if (wait) {
+      void reply.header("retry-after", String(wait));
+      throw new ApiError(429, "rate_limited", `Tentativas demais. Tente de novo em ${wait} s.`);
+    }
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!password || !sameSecret(password, cfg.sitePassword!)) throw new ApiError(401, "wrong_password", "Senha incorreta");
+    const { token, maxAge } = issueSession(cfg);
+    setSessionCookie(reply, req, token, maxAge);
+    return reply.code(204).send();
+  });
+
+  app.delete("/v1/session", async (req, reply) => {
+    clearSessionCookie(reply, req);
+    return reply.code(204).send();
+  });
+
+  /** Vídeos das últimas horas (enquanto não expiram), do mais novo ao mais antigo. */
+  app.get("/v1/videos", { preHandler: requireKey }, async (req) => {
+    const since = Date.now() - cfg.ttlHours * 3600_000;
+    return { videos: db.recentJobs(req.apiKey!.id, since).map((j) => jobView(j, req)) };
+  });
+
   app.get("/v1/presets", { preHandler: requireKey }, async () => ({ presets: await presets.list() }));
   app.get("/v1/presets/schema", { preHandler: requireKey }, async () => presetSchema);
   app.get<{ Params: { id: string } }>("/v1/presets/:id", { preHandler: requireKey }, async (req) => presets.get(req.params.id));
   app.get("/v1/platforms", { preHandler: requireKey }, async () => ({ platforms: listPlatforms() }));
   app.get("/v1/audio", { preHandler: requireKey }, async () => audioLibrary.list());
+  app.get<{ Params: { id: string } }>("/v1/audio/:id/file", { preHandler: requireKey }, async (req, reply) => {
+    const { path, contentType } = audioLibrary.fileOf(req.params.id);
+    const size = (await stat(path)).size;
+    return reply
+      .header("content-type", contentType)
+      .header("content-length", String(size))
+      .header("cache-control", "private, max-age=86400")
+      .send(createReadStream(path));
+  });
 
   // ---------------- administração ----------------
 
@@ -554,6 +605,31 @@ export async function buildApp(
     if (!job) throw new ApiError(404, "video_not_found", "Pedido não encontrado");
     return sendVideo(job, req, reply);
   });
+
+  // ---------------- site (apps/web) ----------------
+
+  if (existsSync(join(cfg.webDir, "index.html"))) {
+    const securityHeaders = (reply: FastifyReply, path: string) => {
+      void reply.header("x-content-type-options", "nosniff");
+      void reply.header("referrer-policy", "same-origin");
+      if (path.endsWith(".html")) {
+        void reply.header("cache-control", "no-cache");
+        void reply.header(
+          "content-security-policy",
+          "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        );
+      } else if (/[\\/]assets[\\/]/.test(path)) {
+        void reply.header("cache-control", "public, max-age=31536000, immutable");
+      }
+    };
+    await app.register(fastifyStatic, { root: cfg.webDir, prefix: "/app/", setHeaders: securityHeaders, wildcard: false });
+    // Rotas internas do site (ex.: /app/novo) devolvem a mesma página.
+    app.get("/app/*", (_req, reply) => reply.sendFile("index.html"));
+    app.get("/app", (_req, reply) => reply.redirect("/app/"));
+    app.get("/", (_req, reply) => reply.redirect("/app/"));
+  } else {
+    log.warn({ webDir: cfg.webDir }, "site não compilado: /app não será servido");
+  }
 
   // ---------------- ciclo de vida ----------------
 

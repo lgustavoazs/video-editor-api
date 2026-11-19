@@ -2,7 +2,7 @@
 
 Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera vídeos curtos com áudio para Instagram, Facebook, TikTok e YouTube Shorts.
 
-**Estado atual: Fase 2B (API completa).** O motor renderiza fotos e clipes de vídeo com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos por upload, enfileira, avisa por webhook e devolve o vídeo; tem pré-visualização para o editor, biblioteca de músicas e documentação em `/docs`. O site ainda não existe.
+**Estado atual: Fase 3A (site: criar vídeo).** O motor renderiza fotos e clipes com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos, enfileira, avisa por webhook e devolve o vídeo, com documentação em `/docs`. O site, em `/app`, cria vídeos pelo navegador (computador ou celular). O editor visual de presets vem na Fase 3B.
 
 ## Estrutura
 
@@ -12,6 +12,7 @@ Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera ví
 | `presets/` | Um arquivo JSON por estilo; LUTs em `presets/luts/` |
 | `assets/fonts` | Fontes usadas nos textos |
 | `apps/api` | API HTTP (Fastify), fila e banco SQLite |
+| `apps/web` | Site (React + Vite), servido pela API em `/app` |
 | `audio/` | Biblioteca de músicas (`library.json` + `tracks/`); começa vazia |
 | `scripts/` | `testar-api.ps1`: envia uma pasta de fotos para a API a partir do Windows |
 
@@ -88,6 +89,23 @@ Cada estilo é um JSON em `presets/`, validado pelo schema em `packages/engine/s
 
 Exemplos completos em `packages/engine/test/fixtures/`.
 
+## Site (`/app`)
+
+Servido pela própria API, no mesmo endereço: `https://SEU-DOMINIO/app/` (a raiz `/` leva para lá). Entra-se com a senha `SITE_PASSWORD`; a sessão dura 30 dias, num cookie que o JavaScript da página não lê. O navegador nunca recebe chave de API.
+
+Tela **Novo vídeo**:
+
+- Fotos e clipes: escolher ou arrastar arquivos; **a ordem da lista é a ordem do vídeo** (arrastar para reordenar; no celular, segurar um instante antes; ou usar as setas).
+- Tocar num item: na foto, marcar o ponto de interesse (a moldura mostra o que fica no vídeo); no clipe, escolher início e fim assistindo e ligar o som original. Legenda por item.
+- Música: arquivo próprio ou da biblioteca, com o **trecho escolhido na forma de onda** (arrastar a faixa laranja; ouvir antes).
+- Logos de marca e parceiro; a tela avisa se o estilo escolhido não usa a logo, a legenda ou o título.
+- Envio com progresso, acompanhamento da geração, player e download.
+- Fotos HEIC do iPhone: no próprio iPhone o Safari já entrega JPEG; HEIC arrastado no computador é convertido no navegador (a biblioteca de conversão, LGPL, só é baixada quando aparece um HEIC).
+
+Tela **Meus vídeos**: os vídeos das últimas 24 h, com assistir, baixar e apagar.
+
+Desenvolvimento: `npm run api` (porta 3000) e, em outro terminal, `npm run dev -w @video-editor/web` (o Vite repassa `/v1` para a API).
+
 ## API
 
 ```bash
@@ -112,6 +130,9 @@ DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api   # porta 3000
 | `GET /v1/platforms` | Perfis de plataforma (tamanho, duração máxima, zona segura) |
 | `GET /v1/audio` | Biblioteca de músicas e climas disponíveis |
 | `GET /health`, `/docs`, `/openapi.json` | Públicos: healthcheck e documentação |
+| `GET /v1/videos` | Vídeos recentes da chave (últimas 24 h) |
+| `GET /v1/audio/:id/file` | Arquivo de uma música da biblioteca |
+| `GET/POST/DELETE /v1/session` | Login do site (senha → cookie de sessão) |
 | `POST /v1/previews` | (admin) Pré-visualização: até 6 itens, 10 s, metade da resolução, passa na frente da fila |
 | `POST /v1/admin/keys` `{"name": "..."}` | Cria uma chave de cliente e o segredo do webhook (mostrados uma única vez) |
 | `POST /v1/admin/keys/:id/webhook-secret` | Gera ou troca o segredo do webhook de uma chave |
@@ -176,6 +197,7 @@ Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado
 |---|---|---|
 | `DATA_DIR` | `/data` no Docker | Banco, fila e vídeos. Na Railway, o volume persistente |
 | `ADMIN_KEY` | (nenhuma) | Liga as rotas de administração (mínimo 16 caracteres) |
+| `SITE_PASSWORD` | (nenhuma) | Senha do site em `/app` (mínimo 8 caracteres). Sem ela, o site mostra que o acesso está desativado. Trocar a senha encerra as sessões abertas |
 | `RAILWAY_RUN_UID` | | `0` na Railway, porque o volume é montado como root |
 | `VIDEO_TTL_HOURS` | 24 | Prazo do vídeo pronto |
 | `QUEUE_MAX` | 20 | Pedidos aguardando |
@@ -191,7 +213,7 @@ Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado
 ## Deploy na Railway
 
 1. Volume persistente montado em `/data`.
-2. Variáveis: `DATA_DIR=/data`, `RAILWAY_RUN_UID=0`, `ADMIN_KEY`.
+2. Variáveis: `DATA_DIR=/data`, `RAILWAY_RUN_UID=0`, `ADMIN_KEY` e, para o site, `SITE_PASSWORD`.
 3. Conferir: `https://SEU-DOMINIO/v1/admin/info?key=ADMIN_KEY` (`dataDirWritable: true`) e `.../v1/admin/selftest?key=ADMIN_KEY`.
 4. Criar a chave de cliente (no Windows, `curl.exe`):
 

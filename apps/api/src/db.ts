@@ -159,6 +159,15 @@ export class Db {
     return this.sql.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as JobRow | undefined;
   }
 
+  /** Vídeos recentes de uma chave, do mais novo ao mais antigo (sem os cancelados e apagados). */
+  recentJobs(keyId: string, since: number, limit = 50): JobRow[] {
+    return this.sql
+      .prepare(
+        "SELECT * FROM jobs WHERE key_id = ? AND kind = 'video' AND created_at >= ? AND status NOT IN ('canceled','deleted') ORDER BY created_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(keyId, since, limit) as unknown as JobRow[];
+  }
+
   jobsByStatus(status: JobStatus): JobRow[] {
     return this.sql
       .prepare("SELECT * FROM jobs WHERE status = ? ORDER BY created_at, rowid")

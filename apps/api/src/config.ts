@@ -40,6 +40,10 @@ export interface ApiConfig {
   selftestWarmup: boolean;
   /** Pré-visualizações aguardando, no máximo. */
   previewQueueMax: number;
+  /** Senha do site (uso próprio). Sem ela (ou sem ADMIN_KEY), o login do site fica desligado. */
+  sitePassword?: string;
+  /** Pasta do site compilado (apps/web/dist). Se não existir, o site não é servido. */
+  webDir: string;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -78,5 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     audioDir: env.AUDIO_DIR ?? join(REPO_ROOT, "audio"),
     selftestWarmup: env.SELFTEST_WARMUP !== "false",
     previewQueueMax: int(env.PREVIEW_QUEUE_MAX, 3),
+    sitePassword: env.SITE_PASSWORD && env.SITE_PASSWORD.length >= 8 ? env.SITE_PASSWORD : undefined,
+    webDir: env.WEB_DIR ?? join(REPO_ROOT, "apps", "web", "dist"),
   };
 }
