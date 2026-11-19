@@ -5,7 +5,13 @@
 #   .\scripts\testar-api.ps1 -Url ... -Chave ... -Pasta C:\fotos -Audio C:\musica.mp3 -Inicio 30 -Duracao 20 -Logo C:\logo.png
 #   .\scripts\testar-api.ps1 -Url ... -Chave ... -Pasta C:\fotos -Clima calmo -Duracao 20     (música da biblioteca)
 #
-# A pasta pode ter JPEG, PNG, WebP e vídeos (MP4, MOV). A ordem é a alfabética dos nomes.
+# A pasta pode ter JPEG, PNG, WebP e vídeos (MP4, MOV). Arquivos de áudio são ignorados.
+#
+# ORDEM: todas as imagens e vídeos da pasta entram no vídeo, em ordem alfabética do nome.
+#   Numere com dois dígitos para controlar: 01-chegada.jpg, 02-aquecimento.jpg, ... 10-podio.jpg
+#   (sem o zero, "10" viria antes de "2").
+# LOGO: deixe fora da pasta das fotos e passe com -Logo (ou -Parceiro). Dentro da pasta, ela
+#   entraria no vídeo como uma foto comum.
 
 param(
   [Parameter(Mandatory = $true)] [string] $Url,
