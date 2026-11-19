@@ -51,6 +51,7 @@ export const optionsSchema = {
         file: field,
         libraryId: { type: "string", maxLength: 64 },
         mood: { type: "string", maxLength: 64 },
+        seed: { type: "integer", minimum: 0, maximum: 4294967295 },
         start: time,
         end: time,
         duration: time,
@@ -108,14 +109,34 @@ export const optionsSchema = {
         },
       },
     },
-    callbackUrl: { type: "string", maxLength: 2048, pattern: "^https://" },
+    callbackUrl: { type: "string", maxLength: 2048, pattern: "^https?://" },
   },
 } as const;
+
+/**
+ * Formato de `options` em POST /v1/previews: igual ao de vídeos, mas o preset pode vir
+ * inteiro (objeto JSON, como o editor exporta), até 6 itens e sem webhook.
+ */
+export const previewOptionsSchema = (() => {
+  const s = structuredClone(optionsSchema) as unknown as {
+    properties: Record<string, unknown> & { items: { maxItems: number } };
+  };
+  s.properties.preset = {
+    oneOf: [
+      { type: "string", pattern: "^[a-z0-9-]{1,64}$" },
+      { type: "object" },
+    ],
+  };
+  s.properties.items.maxItems = 6;
+  delete s.properties.callbackUrl;
+  return s;
+})();
 
 type Time = number | string;
 
 export interface VideoOptions {
-  preset?: string;
+  /** Id do preset; nas pré-visualizações também pode ser o preset inteiro. */
+  preset?: string | Record<string, unknown>;
   platform?: string;
   items: {
     file: string;
@@ -128,7 +149,16 @@ export interface VideoOptions {
     keepAudio?: boolean;
     volume?: number;
   }[];
-  audio?: { file?: string; libraryId?: string; mood?: string; start?: Time; end?: Time; duration?: Time; loop?: boolean };
+  audio?: {
+    file?: string;
+    libraryId?: string;
+    mood?: string;
+    seed?: number;
+    start?: Time;
+    end?: Time;
+    duration?: Time;
+    loop?: boolean;
+  };
   timing?: { mode?: "audio" | "fixed"; total?: number };
   logos?: { role: "brand" | "partner"; file: string }[];
   title?: string;
@@ -141,7 +171,8 @@ export interface VideoOptions {
 }
 
 const ajv = new Ajv({ allErrors: false, strict: false });
-const validate = ajv.compile<VideoOptions>(optionsSchema);
+const validateVideo = ajv.compile<VideoOptions>(optionsSchema);
+const validatePreview = ajv.compile<VideoOptions>(previewOptionsSchema);
 
 function describe(err: ErrorObject): string {
   const where = err.instancePath ? `options${err.instancePath.replace(/\/(\d+)/g, "[$1]").replace(/\//g, ".")}` : "options";
@@ -165,6 +196,8 @@ function describe(err: ErrorObject): string {
       return `${where}: máximo de ${(err.params as { limit: number }).limit} caracteres`;
     case "pattern":
       return where.endsWith("callbackUrl") ? `${where}: deve ser um endereço https://` : `${where}: formato inválido`;
+    case "oneOf":
+      return `${where}: use o id de um preset ou o preset completo (objeto JSON)`;
     case "minimum":
     case "maximum":
     case "exclusiveMinimum":
@@ -174,7 +207,8 @@ function describe(err: ErrorObject): string {
   }
 }
 
-export function parseOptions(text: string | undefined): VideoOptions {
+export function parseOptions(text: string | undefined, kind: "video" | "preview" = "video"): VideoOptions {
+  const validate = kind === "preview" ? validatePreview : validateVideo;
   if (text === undefined || text.trim() === "") {
     throw new ApiError(400, "missing_options", 'Envie o campo "options" (JSON) no multipart');
   }
@@ -189,10 +223,13 @@ export function parseOptions(text: string | undefined): VideoOptions {
     throw new ApiError(400, "invalid_options", err ? describe(err) : "options inválido");
   }
   if (raw.audio && raw.audio.file === undefined && raw.audio.libraryId === undefined && raw.audio.mood === undefined) {
-    throw new ApiError(400, "invalid_options", "options.audio: informe file (upload) ou, a partir da Fase 2B, libraryId/mood");
+    throw new ApiError(400, "invalid_options", "options.audio: informe file (upload), libraryId ou mood");
   }
   if (raw.audio && [raw.audio.file, raw.audio.libraryId, raw.audio.mood].filter((v) => v !== undefined).length > 1) {
     throw new ApiError(400, "invalid_options", "options.audio: use só um entre file, libraryId e mood");
+  }
+  if (raw.audio?.seed !== undefined && raw.audio.mood === undefined) {
+    throw new ApiError(400, "invalid_options", "options.audio.seed só vale junto com mood");
   }
   const roles = (raw.logos ?? []).map((l) => l.role);
   if (new Set(roles).size !== roles.length) {

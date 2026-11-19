@@ -4,9 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 
 export type JobStatus = "queued" | "processing" | "done" | "failed" | "expired" | "canceled" | "deleted";
 
+export type JobKind = "video" | "preview";
+export type WebhookStatus = "pending" | "delivered" | "failed";
+
 export interface JobRow {
   id: string;
   key_id: string;
+  kind: JobKind;
   status: JobStatus;
   progress: number;
   created_at: number;
@@ -20,6 +24,12 @@ export interface JobRow {
   warnings_json: string;
   callback_url: string | null;
   output_bytes: number | null;
+  /** Endereço base usado nos links (do pedido original), para o webhook. */
+  base_url: string | null;
+  webhook_status: WebhookStatus | null;
+  webhook_attempts: number;
+  webhook_next_at: number | null;
+  webhook_last_error: string | null;
 }
 
 export interface KeyRow {
@@ -30,6 +40,8 @@ export interface KeyRow {
   created_at: number;
   revoked_at: number | null;
   last_used_at: number | null;
+  /** Segredo do webhook (em texto: é preciso para assinar). */
+  webhook_secret: string | null;
 }
 
 /** Banco SQLite do serviço (chaves e pedidos). Um arquivo só, dentro de DATA_DIR. */
@@ -69,6 +81,20 @@ export class Db {
       CREATE INDEX IF NOT EXISTS jobs_status ON jobs (status, created_at);
       CREATE INDEX IF NOT EXISTS jobs_key ON jobs (key_id, created_at);
     `);
+    // Fase 2B: colunas novas em bancos criados na 2A.
+    this.addColumn("api_keys", "webhook_secret", "TEXT");
+    this.addColumn("jobs", "kind", "TEXT NOT NULL DEFAULT 'video'");
+    this.addColumn("jobs", "base_url", "TEXT");
+    this.addColumn("jobs", "webhook_status", "TEXT");
+    this.addColumn("jobs", "webhook_attempts", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("jobs", "webhook_next_at", "INTEGER");
+    this.addColumn("jobs", "webhook_last_error", "TEXT");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS jobs_webhook ON jobs (webhook_status, webhook_next_at)");
+  }
+
+  private addColumn(table: string, column: string, type: string): void {
+    const cols = this.sql.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {
@@ -79,8 +105,17 @@ export class Db {
 
   insertKey(row: Omit<KeyRow, "revoked_at" | "last_used_at">): void {
     this.sql
-      .prepare("INSERT INTO api_keys (id, name, hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(row.id, row.name, row.hash, row.prefix, row.created_at);
+      .prepare("INSERT INTO api_keys (id, name, hash, prefix, created_at, webhook_secret) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(row.id, row.name, row.hash, row.prefix, row.created_at, row.webhook_secret);
+  }
+
+  key(id: string): KeyRow | undefined {
+    return this.sql.prepare("SELECT * FROM api_keys WHERE id = ?").get(id) as KeyRow | undefined;
+  }
+
+  setWebhookSecret(id: string, secret: string): boolean {
+    const r = this.sql.prepare("UPDATE api_keys SET webhook_secret = ? WHERE id = ? AND revoked_at IS NULL").run(secret, id);
+    return Number(r.changes) > 0;
   }
 
   keyByHash(hash: string): KeyRow | undefined {
@@ -102,12 +137,22 @@ export class Db {
 
   // ---- pedidos ----
 
-  insertJob(row: Pick<JobRow, "id" | "key_id" | "created_at" | "request_json" | "warnings_json" | "callback_url">): void {
+  insertJob(
+    row: Pick<JobRow, "id" | "key_id" | "created_at" | "request_json" | "warnings_json" | "callback_url"> &
+      Partial<Pick<JobRow, "kind" | "base_url">>,
+  ): void {
     this.sql
       .prepare(
-        "INSERT INTO jobs (id, key_id, status, created_at, request_json, warnings_json, callback_url) VALUES (?, ?, 'queued', ?, ?, ?, ?)",
+        "INSERT INTO jobs (id, key_id, kind, status, created_at, request_json, warnings_json, callback_url, base_url) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
       )
-      .run(row.id, row.key_id, row.created_at, row.request_json, row.warnings_json, row.callback_url);
+      .run(row.id, row.key_id, row.kind ?? "video", row.created_at, row.request_json, row.warnings_json, row.callback_url, row.base_url ?? null);
+  }
+
+  /** Avisos de webhook com tentativa vencida. */
+  dueWebhooks(now: number): JobRow[] {
+    return this.sql
+      .prepare("SELECT * FROM jobs WHERE webhook_status = 'pending' AND webhook_next_at <= ? ORDER BY webhook_next_at LIMIT 20")
+      .all(now) as unknown as JobRow[];
   }
 
   job(id: string): JobRow | undefined {

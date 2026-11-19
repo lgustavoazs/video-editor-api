@@ -16,6 +16,7 @@ RUN npm ci
 COPY packages packages
 COPY apps apps
 COPY presets presets
+COPY audio audio
 COPY assets/fonts assets/fonts
 RUN npm run build && npm prune --omit=dev
 

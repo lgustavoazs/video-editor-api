@@ -3,6 +3,7 @@
 # Uso (PowerShell no Windows; usa o curl.exe que já vem no Windows 10/11):
 #   .\scripts\testar-api.ps1 -Url https://SEU-DOMINIO -Chave vea_... -Pasta C:\fotos
 #   .\scripts\testar-api.ps1 -Url ... -Chave ... -Pasta C:\fotos -Audio C:\musica.mp3 -Inicio 30 -Duracao 20 -Logo C:\logo.png
+#   .\scripts\testar-api.ps1 -Url ... -Chave ... -Pasta C:\fotos -Clima calmo -Duracao 20     (música da biblioteca)
 #
 # A pasta pode ter JPEG, PNG, WebP e vídeos (MP4, MOV). A ordem é a alfabética dos nomes.
 
@@ -11,6 +12,8 @@ param(
   [Parameter(Mandatory = $true)] [string] $Chave,
   [Parameter(Mandatory = $true)] [string] $Pasta,
   [string] $Audio,
+  [string] $MusicaId,
+  [string] $Clima,
   [double] $Inicio = 0,
   [double] $Duracao = 0,
   [string] $Logo,
@@ -54,6 +57,11 @@ if ($Audio) {
   $trecho = @{ file = "musica"; start = $Inicio }
   if ($Duracao -gt 0) { $trecho.duration = $Duracao }
   $opcoes.audio = $trecho
+} elseif ($MusicaId -or $Clima) {
+  $trecho = @{ start = $Inicio }
+  if ($MusicaId) { $trecho.libraryId = $MusicaId } else { $trecho.mood = $Clima }
+  if ($Duracao -gt 0) { $trecho.duration = $Duracao }
+  $opcoes.audio = $trecho
 } else {
   $opcoes.timing = @{ mode = "fixed"; total = $(if ($Duracao -gt 0) { $Duracao } else { 15 }) }
 }
@@ -75,6 +83,7 @@ Remove-Item $tmp.FullName
 $r = $resposta | ConvertFrom-Json
 if ($r.error) { throw "Erro $($r.error.code): $($r.error.message)" }
 Write-Host "Pedido $($r.id) na fila (duração prevista: $($r.estimatedDuration) s)"
+if ($r.audioTrack) { Write-Host "  música: $($r.audioTrack.name) ($($r.audioTrack.id))" }
 foreach ($w in $r.warnings) { Write-Host "  aviso: $w" -ForegroundColor Yellow }
 
 do {

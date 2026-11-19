@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listPresetFiles, loadPreset, mergePreset, parsePreset, type Preset } from "@video-editor/engine";
 import { ApiError } from "./errors.js";
@@ -34,6 +35,17 @@ export class PresetLibrary {
     const preset = await loadPreset(join(this.dir, `${id}.json`), { presetsDir: this.dir });
     this.cache.set(id, preset);
     return preset;
+  }
+
+  /**
+   * Preset enviado inteiro (pré-visualização do editor). Passa pelo mesmo carregador
+   * dos arquivos, então `extends` e as faixas do schema valem igual.
+   */
+  async inline(raw: Record<string, unknown>, scratchDir: string): Promise<Preset> {
+    await mkdir(scratchDir, { recursive: true });
+    const file = join(scratchDir, "preset.json");
+    await writeFile(file, JSON.stringify(raw));
+    return loadPreset(file, { presetsDir: this.dir });
   }
 }
 
