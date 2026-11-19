@@ -18,7 +18,8 @@ export interface UploadedFile {
 }
 
 export interface Upload {
-  options?: string;
+  /** Texto JSON, ou o objeto já convertido (quando o campo vem com Content-Type application/json). */
+  options?: string | object;
   files: Map<string, UploadedFile>;
 }
 
@@ -35,7 +36,7 @@ export async function receiveUpload(req: FastifyRequest, cfg: ApiConfig, dir: st
   await mkdir(dir, { recursive: true });
   const maxFile = Math.max(cfg.limits.photo, cfg.limits.clip, cfg.limits.audio, cfg.limits.logo);
   const files = new Map<string, UploadedFile>();
-  let options: string | undefined;
+  let options: string | object | undefined;
   let total = 0;
   let index = 0;
 
@@ -47,8 +48,13 @@ export async function receiveUpload(req: FastifyRequest, cfg: ApiConfig, dir: st
       if (part.fieldname !== "options") {
         throw new ApiError(400, "unknown_field", `Campo de texto desconhecido: "${part.fieldname}" (só "options" é aceito)`);
       }
-      if (typeof part.value !== "string") throw new ApiError(400, "invalid_options", '"options" deve ser texto JSON');
-      options = part.value;
+      // Com Content-Type application/json no campo, o multipart já entrega o objeto pronto.
+      const value: unknown = part.value;
+      if (typeof value === "string" || (typeof value === "object" && value !== null && !Array.isArray(value))) {
+        options = value;
+      } else {
+        throw new ApiError(400, "invalid_options", '"options" deve ser um objeto JSON');
+      }
       continue;
     }
     const field = part.fieldname;

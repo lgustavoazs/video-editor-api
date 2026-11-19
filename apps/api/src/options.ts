@@ -207,16 +207,20 @@ function describe(err: ErrorObject): string {
   }
 }
 
-export function parseOptions(text: string | undefined, kind: "video" | "preview" = "video"): VideoOptions {
+export function parseOptions(input: string | object | undefined, kind: "video" | "preview" = "video"): VideoOptions {
   const validate = kind === "preview" ? validatePreview : validateVideo;
-  if (text === undefined || text.trim() === "") {
+  if (input === undefined || (typeof input === "string" && input.trim() === "")) {
     throw new ApiError(400, "missing_options", 'Envie o campo "options" (JSON) no multipart');
   }
   let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new ApiError(400, "invalid_json", 'O campo "options" não é um JSON válido');
+  if (typeof input === "string") {
+    try {
+      raw = JSON.parse(input);
+    } catch {
+      throw new ApiError(400, "invalid_json", 'O campo "options" não é um JSON válido');
+    }
+  } else {
+    raw = structuredClone(input);
   }
   if (!validate(raw)) {
     const err = validate.errors?.[0];
