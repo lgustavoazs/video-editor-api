@@ -32,10 +32,15 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `audio.ts`: catálogo `audio/library.json` (por `libraryId` ou `mood` + `seed`); catálogo inválido impede o servidor de iniciar.
   - `docs.ts`: OpenAPI 3.1 escrito à mão + Swagger UI em `/docs` (público). Toda rota nova precisa entrar aqui: um teste confere.
   - Pré-visualização: `kind = "preview"`, metade da resolução, `veryfast`, até 6 itens e 10 s, prioridade na fila.
+  - `session.ts`: login do site (`SITE_PASSWORD`) → cookie assinado HttpOnly SameSite=Strict, 30 dias; a sessão vale como a "chave" interna `site` (não vale para `/v1/admin/*`). O site compilado (`apps/web/dist`) é servido em `/app` com CSP.
+- `apps/web/src` (Fase 3A, React + Vite, base `/app/`):
+  - `lib.ts`: funções puras testadas (montar o pedido, corte com foco, tempos, validação). A ordem do vídeo é a ordem de `items`.
+  - `NewVideo.tsx` (tela principal), `ItemsPanel.tsx` (envio e ordem com dnd-kit), `ItemEditor.tsx` (foco e moldura do corte; trecho do clipe), `MusicPanel.tsx` (wavesurfer com região do trecho), `LogosPanel.tsx`, `JobView.tsx`, `MyVideos.tsx`.
+  - `media.ts`: HEIC → JPEG com `heic-to/csp` (LGPL; carregado só quando aparece HEIC, em arquivo separado).
 - `audio/`: biblioteca de músicas (começa vazia; poucas faixas no repositório, só com licença para uso comercial).
 - `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais. LUTs em `presets/luts/`.
 - `assets/fonts`: fontes DejaVu (licença livre) para o texto renderizar igual em qualquer máquina.
-- Planejado: `apps/web` (Next.js com editor visual de presets, na Vercel).
+- Hospedagem do site: decidido servir pela própria API na Railway (não na Vercel): upload grande sem limite da Vercel e sem chave no navegador.
 
 ## Regras do motor
 
@@ -57,8 +62,9 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 1A. Motor base: concluída.
 1C. Clipes de vídeo: concluída.
 2A. API: concluída (upload, fila, chaves, consulta e download, administração, limpeza por TTL).
-2B. API (esta): webhook (HMAC, segredo por chave), `/v1/previews` com prioridade, biblioteca de áudio (id ou mood), OpenAPI pública em `/docs`.
-3. Site: upload, seletor de trecho com forma de onda, editor visual de presets (exporta JSON).
+2B. API: concluída (webhook, `/v1/previews`, biblioteca de áudio, OpenAPI pública em `/docs`).
+3A. Site (esta): login, criar vídeo (ordem, foco, trecho do clipe, música com forma de onda, logos), progresso, Meus vídeos; funciona no celular.
+3B. Editor visual de presets (exporta JSON), com prévia aproximada e amostra real por `/v1/previews`.
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
 
@@ -72,6 +78,8 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Fotos HEIC (padrão do iPhone) são recusadas com 415: o sharp pré-compilado não lê HEIC. Avaliar conversão no futuro.
 - Fila e limite por minuto ficam em memória: valem para uma instância só (suficiente na V1).
 - Arquivos de música no repositório servem para poucas faixas; se a biblioteca crescer, mover para o volume com upload pela administração.
+- `heic-to` (conversão de HEIC no navegador) é LGPL-3.0; para uso comercial, manter como arquivo separado e citar a licença (ou trocar a solução).
+- O preset Limpo não tem título, legenda nem logos: o site avisa; esses recursos aparecem com os presets por nicho.
 - A chave criada antes da 2B não tem segredo de webhook: gerar com `POST /v1/admin/keys/:id/webhook-secret`.
 - As chaves de teste que passaram pelo chat (token do spike e a `ADMIN_KEY` inicial) devem ser trocadas antes do uso público.
 
@@ -81,5 +89,6 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 npm install && npm run assets
 npm run sample -- --audio assets/test/tone.wav --start 5 --duration 15
 npm test && npm run typecheck
-DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api
+DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer SITE_PASSWORD=uma-senha npm run api   # site em http://localhost:3000/app/
+npm run dev -w @video-editor/web   # site com recarga automática (porta 5173)
 ```

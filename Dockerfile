@@ -1,4 +1,4 @@
-# API (Fastify) + motor de vídeo (FFmpeg).
+# API (Fastify) + site (React, servido em /app) + motor de vídeo (FFmpeg).
 # Debian 13 (trixie) traz o FFmpeg 7; o motor exige 6.1 ou superior para ter as 58 transições.
 FROM node:22-trixie-slim
 
@@ -11,6 +11,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/engine/package.json packages/engine/
 COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
 RUN npm ci
 
 COPY packages packages

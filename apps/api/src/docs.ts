@@ -170,6 +170,22 @@ export function openApiDocument(version: string) {
     },
     paths: {
       "/v1/videos": {
+        get: {
+          tags: ["Vídeos"],
+          summary: "Vídeos recentes da chave (enquanto não expiram), do mais novo ao mais antigo",
+          security: [{ apiKey: [] }],
+          responses: {
+            "200": {
+              description: "Lista",
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { videos: { type: "array", items: { $ref: "#/components/schemas/Job" } } } },
+                },
+              },
+            },
+            ...errors(401),
+          },
+        },
         post: {
           tags: ["Vídeos"],
           summary: "Criar um vídeo",
@@ -235,6 +251,15 @@ export function openApiDocument(version: string) {
           responses: { "200": { description: "Faixas e climas disponíveis" }, ...errors(401) },
         },
       },
+      "/v1/audio/{id}/file": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: {
+          tags: ["Catálogo"],
+          summary: "Arquivo de uma música da biblioteca (para ouvir ou desenhar a forma de onda)",
+          security: [{ apiKey: [] }],
+          responses: { "200": { description: "Áudio", content: { "audio/*": { schema: { type: "string", format: "binary" } } } }, ...errors(401, 404) },
+        },
+      },
       "/v1/previews": {
         post: {
           tags: ["Administração"],
@@ -295,6 +320,29 @@ export function openApiDocument(version: string) {
       "/v1/admin/jobs/{id}/download": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         get: { tags: ["Administração"], summary: "Baixar qualquer vídeo (inclusive pré-visualizações)", security: [{ adminKey: [] }], responses: { "200": { description: "Vídeo" } } },
+      },
+      "/v1/session": {
+        get: {
+          tags: ["Site"],
+          summary: "Estado do login do site (usado pela página em /app)",
+          responses: {
+            "200": {
+              description: "enabled: login configurado; authenticated: há sessão válida",
+              content: { "application/json": { schema: { type: "object", properties: { enabled: { type: "boolean" }, authenticated: { type: "boolean" } } } } },
+            },
+          },
+        },
+        post: {
+          tags: ["Site"],
+          summary: "Entrar no site com a senha (cria um cookie de sessão por 30 dias)",
+          description: "A sessão vale como chave da API para as rotas de vídeos, presets, plataformas e áudio, só a partir do próprio site. Até 5 tentativas por minuto.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", required: ["password"], properties: { password: { type: "string" } } } } },
+          },
+          responses: { "204": { description: "Sessão criada (cookie)" }, ...errors(401, 404, 429) },
+        },
+        delete: { tags: ["Site"], summary: "Sair do site", responses: { "204": { description: "Sessão encerrada" } } },
       },
       "/health": {
         get: { tags: ["Serviço"], summary: "Verificação de saúde (pública)", responses: { "200": { description: "OK" } } },

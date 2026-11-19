@@ -98,6 +98,15 @@ export class AudioLibrary {
     return p;
   }
 
+  /** Caminho do arquivo de uma faixa (para o site desenhar a forma de onda). */
+  fileOf(id: string): { path: string; contentType: string } {
+    const track = this.tracks.find((t) => t.id === id);
+    if (!track) throw new ApiError(404, "audio_not_found", `Música "${id}" não existe na biblioteca`);
+    const ext = track.file.split(".").pop()?.toLowerCase();
+    const types: Record<string, string> = { mp3: "audio/mpeg", m4a: "audio/mp4", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac" };
+    return { path: this.path(track), contentType: types[ext ?? ""] ?? "application/octet-stream" };
+  }
+
   moods(): string[] {
     return [...new Set(this.tracks.flatMap((t) => t.moods))].sort();
   }
