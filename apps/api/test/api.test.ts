@@ -126,6 +126,26 @@ describe("validação do pedido", () => {
     assert.equal(res.json().error.code, "missing_options");
   });
 
+  test("options enviado como application/json (como o curl -F 'options=<arquivo;type=application/json'): aceito", async () => {
+    // Reproduz o que o curl envia: campo de texto com Content-Type application/json.
+    const boundary = "----limite-teste";
+    const photo = await readFile(assets.photos[0]!);
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="options"\r\nContent-Type: application/json\r\n\r\n`),
+      Buffer.from(JSON.stringify({ items: [{ file: "foto" }], timing: { total: 3 } })),
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="foto"; filename="foto.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+      photo,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const res = await api.app.inject({
+      method: "POST",
+      url: "/v1/videos",
+      payload,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}`, authorization: `Bearer ${key}` },
+    });
+    assert.equal(res.statusCode, 202, res.body);
+  });
+
   test("options com campo desconhecido: 400 explicando o campo", async () => {
     const res = await postVideo({ items: [{ file: "foto" }], cor: "azul" }, { foto: assets.photos[0]! });
     assert.equal(res.statusCode, 400);
