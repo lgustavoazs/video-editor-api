@@ -2,7 +2,7 @@
 
 Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera vídeos curtos com áudio para Instagram, Facebook, TikTok e YouTube Shorts.
 
-**Estado atual: Fase 2A (API).** O motor renderiza fotos e clipes de vídeo com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos por upload, enfileira e devolve o vídeo. O site ainda não existe.
+**Estado atual: Fase 2B (API completa).** O motor renderiza fotos e clipes de vídeo com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos por upload, enfileira, avisa por webhook e devolve o vídeo; tem pré-visualização para o editor, biblioteca de músicas e documentação em `/docs`. O site ainda não existe.
 
 ## Estrutura
 
@@ -12,6 +12,7 @@ Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera ví
 | `presets/` | Um arquivo JSON por estilo; LUTs em `presets/luts/` |
 | `assets/fonts` | Fontes usadas nos textos |
 | `apps/api` | API HTTP (Fastify), fila e banco SQLite |
+| `audio/` | Biblioteca de músicas (`library.json` + `tracks/`); começa vazia |
 | `scripts/` | `testar-api.ps1`: envia uma pasta de fotos para a API a partir do Windows |
 
 ## Requisitos
@@ -87,7 +88,7 @@ Cada estilo é um JSON em `presets/`, validado pelo schema em `packages/engine/s
 
 Exemplos completos em `packages/engine/test/fixtures/`.
 
-## API (Fase 2A)
+## API
 
 ```bash
 npm run build
@@ -109,8 +110,11 @@ DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api   # porta 3000
 | `DELETE /v1/videos/:id` | Cancela (na fila) ou apaga (pronto). Durante o render: `409` |
 | `GET /v1/presets`, `/v1/presets/:id`, `/v1/presets/schema` | Presets disponíveis e o JSON Schema |
 | `GET /v1/platforms` | Perfis de plataforma (tamanho, duração máxima, zona segura) |
-| `GET /health` | Público, para o healthcheck |
-| `POST /v1/admin/keys` `{"name": "..."}` | Cria uma chave de cliente (mostrada uma única vez) |
+| `GET /v1/audio` | Biblioteca de músicas e climas disponíveis |
+| `GET /health`, `/docs`, `/openapi.json` | Públicos: healthcheck e documentação |
+| `POST /v1/previews` | (admin) Pré-visualização: até 6 itens, 10 s, metade da resolução, passa na frente da fila |
+| `POST /v1/admin/keys` `{"name": "..."}` | Cria uma chave de cliente e o segredo do webhook (mostrados uma única vez) |
+| `POST /v1/admin/keys/:id/webhook-secret` | Gera ou troca o segredo do webhook de uma chave |
 | `GET /v1/admin/keys`, `DELETE /v1/admin/keys/:id` | Lista e revoga chaves |
 | `GET /v1/admin/info` | FFmpeg, filtros, CPUs, memória, disco, fila |
 | `GET /v1/admin/selftest?photos=8&clips=2&duration=20` | Gera um vídeo com os arquivos de teste, sem upload |
@@ -135,12 +139,33 @@ curl -X POST https://SEU-DOMINIO/v1/videos -H "Authorization: Bearer vea_..." \
 - Fotos HEIC (padrão do iPhone) ainda não são aceitas: erro `415` pedindo JPEG ou PNG.
 - Erros têm sempre o formato `{"error": {"code", "message", "details"}}`. Regras do motor (fotos demais, trecho fora do áudio...) voltam como `422` **na hora**, antes de entrar na fila.
 - O vídeo fica disponível por 24 h; as entradas são apagadas assim que o render termina.
-- Ainda não disponíveis (Fase 2B): aviso por webhook (`callbackUrl` é guardado), biblioteca de áudio (`libraryId`/`mood`), `/v1/previews` e a documentação OpenAPI.
+- Música da biblioteca no lugar do arquivo: `"audio": {"libraryId": "piano-01"}` ou `"audio": {"mood": "calmo", "seed": 7}`. Sem `seed`, o servidor sorteia e devolve a semente em `audioTrack`, para repetir a escolha.
+
+### Webhook
+
+Com `"callbackUrl": "https://..."`, o servidor faz um POST quando o vídeo fica pronto (`video.done`) ou falha (`video.failed`). Sem resposta 2xx, tenta de novo após 10 s, 1 min e 5 min. O estado aparece em `webhook` na consulta do vídeo.
+
+Para conferir que o aviso veio do servidor, use o segredo `whsec_...` da chave:
+
+```js
+// X-Webhook-Signature: t=<unix>,v1=<hex>
+const [, t, v1] = /t=(\d+),v1=([0-9a-f]+)/.exec(req.headers["x-webhook-signature"]);
+const esperado = crypto.createHmac("sha256", SEGREDO).update(`${t}.${corpoBruto}`).digest("hex");
+const valido = crypto.timingSafeEqual(Buffer.from(v1, "hex"), Buffer.from(esperado, "hex"))
+  && Math.abs(Date.now() / 1000 - Number(t)) < 300;
+```
+
+O endereço precisa ser `https://` e público (endereços internos são recusados).
+
+### Pré-visualização (editor)
+
+`POST /v1/previews`, com a chave de administrador, aceita o mesmo multipart dos vídeos. O `preset` pode ser um id ou o preset inteiro, como o editor exporta (inclusive com `extends`). O resultado sai em 540×960 (metade da plataforma), encode rápido, e é consultado em `/v1/admin/jobs/:id`.
 
 Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado:
 
 ```powershell
 .\scripts\testar-api.ps1 -Url https://SEU-DOMINIO -Chave vea_... -Pasta C:\fotos -Audio C:\musica.mp3 -Inicio 30 -Duracao 20 -Logo C:\logo.png
+.\scripts\testar-api.ps1 -Url https://SEU-DOMINIO -Chave vea_... -Pasta C:\fotos -Clima calmo -Duracao 20
 ```
 
 ### Variáveis de ambiente
@@ -157,6 +182,9 @@ Do Windows, `scripts/testar-api.ps1` envia uma pasta inteira e baixa o resultado
 | `MIN_FREE_MB` | 1024 | Abaixo disso, novos pedidos recebem `503` |
 | `FFMPEG_THREADS` | núcleos disponíveis (máx. 8) | Limite de threads do FFmpeg |
 | `PUBLIC_URL` | (host da requisição) | Base dos links devolvidos |
+| `PREVIEW_QUEUE_MAX` | 3 | Pré-visualizações aguardando |
+| `WEBHOOK_TIMEOUT_MS` | 10000 | Tempo máximo de cada tentativa do webhook |
+| `SELFTEST_WARMUP` | true | Gera os arquivos do autoteste ao iniciar (em segundo plano) |
 
 ## Deploy na Railway
 

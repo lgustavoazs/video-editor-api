@@ -8,12 +8,21 @@ export function hashKey(key: string): string {
 }
 
 /** Cria uma chave nova. O valor completo só é devolvido aqui; o banco guarda o hash. */
-export function createKey(db: Db, name: string, now = Date.now()): { id: string; key: string; prefix: string } {
+export function newWebhookSecret(): string {
+  return "whsec_" + randomBytes(24).toString("base64url");
+}
+
+export function createKey(
+  db: Db,
+  name: string,
+  now = Date.now(),
+): { id: string; key: string; prefix: string; webhookSecret: string } {
   const key = PREFIX + randomBytes(24).toString("base64url");
   const id = randomUUID();
   const prefix = key.slice(0, PREFIX.length + 6);
-  db.insertKey({ id, name, hash: hashKey(key), prefix, created_at: now });
-  return { id, key, prefix };
+  const webhookSecret = newWebhookSecret();
+  db.insertKey({ id, name, hash: hashKey(key), prefix, created_at: now, webhook_secret: webhookSecret });
+  return { id, key, prefix, webhookSecret };
 }
 
 export function findActiveKey(db: Db, key: string): KeyRow | undefined {
@@ -37,6 +46,7 @@ export function publicKey(row: KeyRow) {
     createdAt: new Date(row.created_at).toISOString(),
     lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
     revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
+    hasWebhookSecret: Boolean(row.webhook_secret),
   };
 }
 

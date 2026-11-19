@@ -29,6 +29,17 @@ export interface ApiConfig {
   allowAdminQueryKey: boolean;
   /** Intervalo da limpeza automática, em minutos. */
   cleanupMinutes: number;
+  /** Só para testes: aceita webhook em http e em endereços internos. */
+  webhookAllowInsecure: boolean;
+  webhookTimeoutMs: number;
+  /** Espera antes de cada nova tentativa do webhook (3 novas tentativas). */
+  webhookRetryDelaysMs: number[];
+  /** Pasta do catálogo de músicas (library.json + arquivos). */
+  audioDir: string;
+  /** Gera os arquivos do autoteste ao iniciar, em segundo plano. */
+  selftestWarmup: boolean;
+  /** Pré-visualizações aguardando, no máximo. */
+  previewQueueMax: number;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -61,5 +72,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     publicUrl: env.PUBLIC_URL?.replace(/\/+$/, ""),
     allowAdminQueryKey: env.ADMIN_QUERY_KEY !== "false",
     cleanupMinutes: int(env.CLEANUP_MINUTES, 10),
+    webhookAllowInsecure: env.WEBHOOK_ALLOW_INSECURE === "true",
+    webhookTimeoutMs: int(env.WEBHOOK_TIMEOUT_MS, 10_000),
+    webhookRetryDelaysMs: [10_000, 60_000, 300_000],
+    audioDir: env.AUDIO_DIR ?? join(REPO_ROOT, "audio"),
+    selftestWarmup: env.SELFTEST_WARMUP !== "false",
+    previewQueueMax: int(env.PREVIEW_QUEUE_MAX, 3),
   };
 }

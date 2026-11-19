@@ -19,16 +19,22 @@ import {
   type RenderItem,
 } from "@video-editor/engine";
 import type { ApiConfig } from "./config.js";
-import { Db, type JobRow, type KeyRow } from "./db.js";
+import { AudioLibrary } from "./audio.js";
+import { Db, type JobKind, type JobRow, type KeyRow } from "./db.js";
+import { registerDocs } from "./docs.js";
 import { ApiError, toHttpError } from "./errors.js";
-import { cleanup, inputDir, jobDir, JobQueue, outputFile, type StoredRequest } from "./jobs.js";
-import { createKey, findActiveKey, publicKey, RateLimiter, sameSecret } from "./keys.js";
+import { cleanup, inputDir, jobDir, JobQueue, outputFile, scaledPlatform, type StoredRequest } from "./jobs.js";
+import { createKey, findActiveKey, newWebhookSecret, publicKey, RateLimiter, sameSecret } from "./keys.js";
 import { parseOptions, referencedFiles, type VideoOptions } from "./options.js";
 import { applyOverrides, PresetLibrary } from "./presets.js";
 import { checkFile, discard, receiveUpload } from "./upload.js";
+import { checkCallbackUrl, WebhookSender } from "./webhook.js";
 
 const run = promisify(execFile);
-export const API_VERSION = "2A";
+export const API_VERSION = "2B";
+/** Pré-visualização: metade da resolução da plataforma e no máximo 10 s. */
+export const PREVIEW_SCALE = 0.5;
+export const PREVIEW_MAX_SECONDS = 10;
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -40,6 +46,9 @@ export interface App {
   app: FastifyInstance;
   db: Db;
   queue: JobQueue;
+  webhooks: WebhookSender;
+  /** Rotas registradas (método e caminho), para conferir a documentação. */
+  routes: { method: string; url: string }[];
   /** Encerra servidor, fila e banco. */
   close(): Promise<void>;
 }
@@ -49,7 +58,10 @@ function safeUrl(url: string): string {
   return url.replace(/([?&]key=)[^&]*/g, "$1***");
 }
 
-export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}): Promise<App> {
+export async function buildApp(
+  cfg: ApiConfig,
+  opts: { logger?: boolean; fetch?: typeof fetch } = {},
+): Promise<App> {
   const app = Fastify({
     logger:
       opts.logger === false
@@ -67,10 +79,19 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
   const db = new Db(cfg.dataDir);
   const queue = new JobQueue(db, cfg, log);
   const presets = new PresetLibrary(cfg.presetsDir);
+  const audioLibrary = new AudioLibrary(cfg.audioDir);
+  await audioLibrary.load();
+  const webhooks = new WebhookSender(db, cfg, log, opts.fetch);
+  queue.onFinished = (id) => webhooks.schedule(id);
   const limiter = new RateLimiter(cfg.rateLimitPerMinute);
   const createLimiter = new RateLimiter(cfg.createLimitPerMinute);
 
+  const routes: { method: string; url: string }[] = [];
+  app.addHook("onRoute", (r) => {
+    for (const m of [r.method].flat()) if (m !== "HEAD") routes.push({ method: m, url: r.url });
+  });
   await app.register(multipart, { throwFileSizeLimit: true });
+  await registerDocs(app, API_VERSION);
 
   app.setErrorHandler((err, req, reply) => {
     const { status, body } = toHttpError(err);
@@ -128,8 +149,10 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
     const error = job.error_json ? (JSON.parse(job.error_json) as { code: string; message: string; internal?: unknown }) : null;
     const result = job.result_json ? (JSON.parse(job.result_json) as Record<string, unknown>) : null;
     const iso = (t: number | null) => (t ? new Date(t).toISOString() : null);
+    const stored = JSON.parse(job.request_json) as StoredRequest;
     const view: Record<string, unknown> = {
       id: job.id,
+      ...(admin || job.kind !== "video" ? { kind: job.kind } : {}),
       status: job.status,
       progress: Math.round(job.progress * 1000) / 10,
       queuePosition: job.status === "queued" ? queue.position(job.id) : null,
@@ -139,7 +162,16 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
       expiresAt: iso(job.expires_at),
       warnings: JSON.parse(job.warnings_json) as string[],
       error: error ? { code: error.code, message: error.message, ...(admin && error.internal ? { internal: error.internal } : {}) } : null,
+      audioTrack: stored.audioTrack ?? null,
     };
+    if (job.callback_url) {
+      view.webhook = {
+        url: job.callback_url,
+        status: job.webhook_status ?? "waiting",
+        attempts: job.webhook_attempts,
+        lastError: job.webhook_last_error,
+      };
+    }
     if (result) {
       const { stats, ...rest } = result;
       view.result = admin ? result : rest;
@@ -197,44 +229,128 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
   // ---------------- criação de pedidos ----------------
 
   /** Valida, planeja e coloca na fila. Usado pelo upload e pelo autoteste. */
-  async function submit(id: string, keyId: string, options: VideoOptions, paths: Map<string, string>, extraWarnings: string[]) {
+  interface SubmitOptions {
+    kind?: JobKind;
+    baseUrl?: string;
+    /** Chave que pediu (para o webhook). Ausente no autoteste e nas pré-visualizações. */
+    key?: KeyRow;
+  }
+
+  /** Valida, planeja e coloca na fila. Usado pelo upload, pelas pré-visualizações e pelo autoteste. */
+  async function submit(
+    id: string,
+    keyId: string,
+    options: VideoOptions,
+    paths: Map<string, string>,
+    extraWarnings: string[],
+    opts: SubmitOptions = {},
+  ) {
+    const kind = opts.kind ?? "video";
     const warnings = [...extraWarnings];
-    if (options.audio?.libraryId !== undefined || options.audio?.mood !== undefined) {
-      throw new ApiError(501, "not_available", "A biblioteca de áudio (libraryId/mood) chega na Fase 2B. Por enquanto, envie o arquivo de áudio.");
+    if (options.callbackUrl) {
+      if (!opts.key?.webhook_secret) {
+        throw new ApiError(
+          422,
+          "webhook_secret_missing",
+          "Esta chave não tem segredo de webhook. Peça ao administrador para gerar um (POST /v1/admin/keys/{id}/webhook-secret).",
+        );
+      }
+      await checkCallbackUrl(options.callbackUrl, cfg);
     }
-    if (options.callbackUrl) warnings.push("callbackUrl foi guardado, mas o aviso por webhook só passa a ser enviado na Fase 2B.");
-    const preset = applyOverrides(await presets.get(options.preset ?? cfg.defaultPreset), options.overrides);
+
+    const preset = applyOverrides(
+      typeof options.preset === "object"
+        ? await presets.inline(options.preset, join(inputDir(cfg, id), "_preset"))
+        : await presets.get(options.preset ?? cfg.defaultPreset),
+      options.overrides,
+    );
     const platformId = options.platform ?? "instagram_reels";
-    const platform = getPlatform(platformId);
+    getPlatform(platformId); // confere o id (erro unknown_platform)
+    const scale = kind === "preview" ? PREVIEW_SCALE : undefined;
+    const platform = scaledPlatform(platformId, scale);
     const path = (field: string) => paths.get(field)!;
     const items: RenderItem[] = options.items.map((it) => ({ ...it, type: it.type!, file: path(it.file) }));
-    const audio = options.audio?.file ? { ...options.audio, file: path(options.audio.file) } : undefined;
-    if (audio) {
-      delete (audio as { libraryId?: unknown }).libraryId;
-      delete (audio as { mood?: unknown }).mood;
+
+    let audio: StoredRequest["audio"];
+    let audioTrack: StoredRequest["audioTrack"];
+    if (options.audio) {
+      const { file, libraryId, mood, seed, ...segment } = options.audio;
+      if (file) {
+        audio = { ...segment, file: path(file) };
+      } else {
+        const picked = audioLibrary.pick({ libraryId, mood, seed });
+        audio = { ...segment, file: picked.file };
+        audioTrack = { id: picked.track.id, name: picked.track.name, seed: picked.seed, attribution: picked.track.attribution ?? null };
+      }
     }
+
     const stored: StoredRequest = {
       items,
       preset,
-      platform: platform.id,
+      platform: platformId,
       timing: { mode: options.timing?.mode ?? (audio ? "audio" : "fixed"), total: options.timing?.total },
       audio,
       logos: options.logos?.map((l) => ({ role: l.role, file: path(l.file) })),
       title: options.title,
+      scale,
+      encode: kind === "preview" ? { x264Preset: "veryfast", crf: 26 } : undefined,
+      audioTrack,
     };
     const plan = await planRender({ ...stored, platform, assets: cfg.assets });
+    if (kind === "preview" && plan.duration > PREVIEW_MAX_SECONDS + 1e-6) {
+      throw new ApiError(
+        422,
+        "preview_too_long",
+        `A pré-visualização tem no máximo ${PREVIEW_MAX_SECONDS} s (o pedido daria ${plan.duration.toFixed(1)} s). Use timing.total ou um trecho de áudio menor.`,
+      );
+    }
     warnings.push(...plan.warnings);
-    if (queue.isFull()) throw new ApiError(503, "queue_full", "A fila está cheia. Tente de novo em alguns minutos.");
+    if (kind === "preview" ? queue.isPreviewFull() : queue.isFull()) {
+      throw new ApiError(503, "queue_full", "A fila está cheia. Tente de novo em alguns minutos.");
+    }
+    const unique = [...new Set(warnings)];
     db.insertJob({
       id,
       key_id: keyId,
+      kind,
       created_at: Date.now(),
       request_json: JSON.stringify(stored),
-      warnings_json: JSON.stringify([...new Set(warnings)]),
+      warnings_json: JSON.stringify(unique),
       callback_url: options.callbackUrl ?? null,
+      base_url: opts.baseUrl ?? null,
     });
-    queue.enqueue(id);
-    return { duration: plan.duration, itemCount: plan.itemCount, warnings: [...new Set(warnings)] };
+    queue.enqueue(id, { priority: kind === "preview" });
+    return { duration: plan.duration, itemCount: plan.itemCount, warnings: unique, audioTrack: audioTrack ?? null };
+  }
+
+  /** Recebe o multipart, confere os arquivos e envia ao submit. Comum a vídeos e pré-visualizações. */
+  async function receiveAndSubmit(req: FastifyRequest, id: string, kind: JobKind, key?: KeyRow) {
+    const dir = inputDir(cfg, id);
+    const upload = await receiveUpload(req, cfg, dir);
+    const options = parseOptions(upload.options, kind);
+    const refs = referencedFiles(options);
+    const warnings: string[] = [];
+    for (const field of upload.files.keys()) {
+      if (!refs.has(field)) warnings.push(`O arquivo "${field}" foi enviado mas não é usado em options e foi ignorado.`);
+    }
+    const paths = new Map<string, string>();
+    for (const [field] of refs) {
+      const file = upload.files.get(field);
+      if (!file) throw new ApiError(400, "missing_file", `options cita o arquivo "${field}", mas ele não foi enviado`, { field });
+      paths.set(field, file.path);
+    }
+    options.items.forEach((it, i) => {
+      const file = upload.files.get(it.file)!;
+      const detected = file.sniffed.kind === "video" ? "clip" : "photo";
+      if (it.type && it.type !== detected && file.sniffed.kind !== "heic" && file.sniffed.kind !== "unknown") {
+        throw new ApiError(415, "unsupported_format", `options.items[${i}]: declarado como ${it.type}, mas o arquivo "${it.file}" é ${file.sniffed.kind === "video" ? "um vídeo" : "uma imagem"}`);
+      }
+      it.type ??= detected;
+      checkFile(cfg, file, it.type, `options.items[${i}] ("${it.file}")`);
+    });
+    if (options.audio?.file) checkFile(cfg, upload.files.get(options.audio.file)!, "audio", `options.audio ("${options.audio.file}")`);
+    options.logos?.forEach((l, i) => checkFile(cfg, upload.files.get(l.file)!, "logo", `options.logos[${i}] ("${l.file}")`));
+    return submit(id, key?.id ?? "admin", options, paths, warnings, { kind, key, baseUrl: baseUrl(req) });
   }
 
   app.post("/v1/videos", { preHandler: requireKey }, async (req, reply) => {
@@ -251,34 +367,8 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
     }
 
     const id = randomUUID();
-    const dir = inputDir(cfg, id);
     try {
-      const upload = await receiveUpload(req, cfg, dir);
-      const options = parseOptions(upload.options);
-      const refs = referencedFiles(options);
-      const warnings: string[] = [];
-      for (const field of upload.files.keys()) {
-        if (!refs.has(field)) warnings.push(`O arquivo "${field}" foi enviado mas não é usado em options e foi ignorado.`);
-      }
-      const paths = new Map<string, string>();
-      for (const [field] of refs) {
-        const file = upload.files.get(field);
-        if (!file) throw new ApiError(400, "missing_file", `options cita o arquivo "${field}", mas ele não foi enviado`, { field });
-        paths.set(field, file.path);
-      }
-      options.items.forEach((it, i) => {
-        const file = upload.files.get(it.file)!;
-        const detected = file.sniffed.kind === "video" ? "clip" : "photo";
-        if (it.type && it.type !== detected && file.sniffed.kind !== "heic" && file.sniffed.kind !== "unknown") {
-          throw new ApiError(415, "unsupported_format", `options.items[${i}]: declarado como ${it.type}, mas o arquivo "${it.file}" é ${file.sniffed.kind === "video" ? "um vídeo" : "uma imagem"}`);
-        }
-        it.type ??= detected;
-        checkFile(cfg, file, it.type, `options.items[${i}] ("${it.file}")`);
-      });
-      if (options.audio?.file) checkFile(cfg, upload.files.get(options.audio.file)!, "audio", `options.audio ("${options.audio.file}")`);
-      options.logos?.forEach((l, i) => checkFile(cfg, upload.files.get(l.file)!, "logo", `options.logos[${i}] ("${l.file}")`));
-
-      const planned = await submit(id, keyId, options, paths, warnings);
+      const planned = await receiveAndSubmit(req, id, "video", req.apiKey);
       const base = baseUrl(req);
       return reply.code(202).send({
         id,
@@ -286,8 +376,32 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
         queuePosition: queue.position(id) || null,
         estimatedDuration: planned.duration,
         itemCount: planned.itemCount,
+        audioTrack: planned.audioTrack,
         warnings: planned.warnings,
         statusUrl: `${base}/v1/videos/${id}`,
+      });
+    } catch (err) {
+      await discard(jobDir(cfg, id));
+      throw err;
+    }
+  });
+
+  /** Pré-visualização do editor: curta, em resolução reduzida e com prioridade na fila. */
+  app.post("/v1/previews", { preHandler: requireAdmin }, async (req, reply) => {
+    if (queue.isPreviewFull()) throw new ApiError(503, "queue_full", "Pré-visualizações demais aguardando. Tente em instantes.");
+    const id = randomUUID();
+    try {
+      const planned = await receiveAndSubmit(req, id, "preview");
+      const base = baseUrl(req);
+      return reply.code(202).send({
+        id,
+        status: "queued",
+        queuePosition: queue.position(id) || null,
+        estimatedDuration: planned.duration,
+        itemCount: planned.itemCount,
+        audioTrack: planned.audioTrack,
+        warnings: planned.warnings,
+        statusUrl: `${base}/v1/admin/jobs/${id}`,
       });
     } catch (err) {
       await discard(jobDir(cfg, id));
@@ -322,6 +436,7 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
   app.get("/v1/presets/schema", { preHandler: requireKey }, async () => presetSchema);
   app.get<{ Params: { id: string } }>("/v1/presets/:id", { preHandler: requireKey }, async (req) => presets.get(req.params.id));
   app.get("/v1/platforms", { preHandler: requireKey }, async () => ({ platforms: listPlatforms() }));
+  app.get("/v1/audio", { preHandler: requireKey }, async () => audioLibrary.list());
 
   // ---------------- administração ----------------
 
@@ -332,8 +447,15 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
     return reply.code(201).send({
       ...created,
       name,
-      warning: "Guarde a chave agora: ela não é exibida de novo (o servidor guarda só o hash).",
+      warning: "Guarde a chave e o segredo do webhook agora: não são exibidos de novo.",
     });
+  });
+
+  /** Gera (ou troca) o segredo de webhook de uma chave. O antigo deixa de valer na hora. */
+  app.post<{ Params: { id: string } }>("/v1/admin/keys/:id/webhook-secret", { preHandler: requireAdmin }, async (req) => {
+    const secret = newWebhookSecret();
+    if (!db.setWebhookSecret(req.params.id, secret)) throw new ApiError(404, "key_not_found", "Chave não encontrada ou revogada");
+    return { id: req.params.id, webhookSecret: secret, warning: "Guarde o segredo agora: ele não é exibido de novo." };
   });
 
   app.get("/v1/admin/keys", { preHandler: requireAdmin }, async () => ({ keys: db.listKeys().map(publicKey) }));
@@ -375,6 +497,16 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
     };
   });
 
+  /** Arquivos do autoteste: gerados uma vez (no início, em segundo plano) e reaproveitados. */
+  let selftestPromise: ReturnType<typeof makeTestAssets> | undefined;
+  function selftestAssets(): ReturnType<typeof makeTestAssets> {
+    selftestPromise ??= makeTestAssets(join(cfg.dataDir, "selftest-assets")).catch((err: unknown) => {
+      selftestPromise = undefined; // tenta de novo na próxima chamada
+      throw err;
+    });
+    return selftestPromise;
+  }
+
   /** Autoteste: gera um vídeo com os arquivos de teste do motor (sem upload), para medir no servidor. */
   app.get<{ Querystring: { photos?: string; clips?: string; duration?: string; preset?: string } }>(
     "/v1/admin/selftest",
@@ -384,8 +516,7 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
       const clipCount = Math.min(3, Math.max(0, Number(req.query.clips ?? 0) | 0));
       const duration = Math.min(180, Math.max(3, Number(req.query.duration ?? 20) || 20));
       if (photos + clipCount === 0) throw new ApiError(400, "invalid_selftest", "Use photos e/ou clips maiores que zero");
-      const assetsDir = join(cfg.dataDir, "selftest-assets");
-      const assets = await makeTestAssets(assetsDir);
+      const assets = await selftestAssets();
       const clipFiles = [assets.clips.landscape, assets.clips.rotated, assets.clips.hdr].filter((c): c is string => Boolean(c));
       const paths = new Map<string, string>();
       const items: VideoOptions["items"] = [];
@@ -427,6 +558,10 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
   // ---------------- ciclo de vida ----------------
 
   await queue.start();
+  webhooks.start();
+  if (cfg.adminKey && cfg.selftestWarmup) {
+    selftestAssets().catch((err: unknown) => log.error({ err }, "falha ao gerar os arquivos do autoteste"));
+  }
   const timer =
     cfg.cleanupMinutes > 0
       ? setInterval(() => {
@@ -440,8 +575,11 @@ export async function buildApp(cfg: ApiConfig, opts: { logger?: boolean } = {}):
     app,
     db,
     queue,
+    webhooks,
+    routes,
     async close() {
       if (timer) clearInterval(timer);
+      await webhooks.stop();
       await app.close();
       await queue.stop();
       db.close();

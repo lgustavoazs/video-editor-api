@@ -13,6 +13,19 @@ export interface StoredRequest {
   audio?: { file: string; start?: number | string; end?: number | string; duration?: number | string; loop?: boolean };
   logos?: { role: "brand" | "partner"; file: string }[];
   title?: string;
+  /** Pré-visualização: fração da resolução da plataforma (ex.: 0,5 = 540x960). */
+  scale?: number;
+  encode?: { x264Preset?: string; crf?: number };
+  /** Música da biblioteca escolhida (para mostrar no estado do pedido). */
+  audioTrack?: { id: string; name: string; seed?: number; attribution?: string | null };
+}
+
+/** Plataforma reduzida para pré-visualização (dimensões pares). */
+export function scaledPlatform(id: string, scale = 1) {
+  const p = getPlatform(id);
+  if (scale === 1) return p;
+  const even = (n: number) => Math.max(2, Math.round((n * scale) / 2) * 2);
+  return { ...p, width: even(p.width), height: even(p.height) };
 }
 
 export interface Logger {
@@ -37,10 +50,15 @@ export function outputFile(cfg: ApiConfig, id: string): string {
  */
 export class JobQueue {
   private pending: string[] = [];
+  /** Pré-visualizações passam na frente dos vídeos comuns. */
+  private priority: string[] = [];
   private running: string | null = null;
   private stopped = false;
   private idle: Promise<void> = Promise.resolve();
   private finishIdle: (() => void) | null = null;
+
+  /** Chamado quando um pedido termina (pronto ou com falha). */
+  onFinished: (id: string) => void = () => {};
 
   constructor(
     private readonly db: Db,
@@ -63,14 +81,21 @@ export class JobQueue {
       });
       await rm(jobDir(this.cfg, job.id), { recursive: true, force: true });
       this.log.warn({ job: job.id }, "pedido interrompido por reinício");
+      this.onFinished(job.id);
     }
-    this.pending = this.db.jobsByStatus("queued").map((j) => j.id);
+    const queued = this.db.jobsByStatus("queued");
+    this.priority = queued.filter((j) => j.kind === "preview").map((j) => j.id);
+    this.pending = queued.filter((j) => j.kind !== "preview").map((j) => j.id);
     if (this.pending.length) this.log.info({ count: this.pending.length }, "retomando fila");
     this.kick();
   }
 
   get size(): number {
     return this.pending.length;
+  }
+
+  get previewSize(): number {
+    return this.priority.length;
   }
 
   get current(): string | null {
@@ -81,22 +106,33 @@ export class JobQueue {
     return this.pending.length >= this.cfg.queueMax;
   }
 
-  enqueue(id: string): void {
-    this.pending.push(id);
+  isPreviewFull(): boolean {
+    return this.priority.length >= this.cfg.previewQueueMax;
+  }
+
+  enqueue(id: string, opts: { priority?: boolean } = {}): void {
+    (opts.priority ? this.priority : this.pending).push(id);
     this.kick();
   }
 
   /** Posição na fila (1 = o próximo), ou 0 se não estiver aguardando. */
   position(id: string): number {
-    return this.pending.indexOf(id) + 1;
+    const p = this.priority.indexOf(id);
+    if (p >= 0) return p + 1;
+    const i = this.pending.indexOf(id);
+    return i < 0 ? 0 : this.priority.length + i + 1;
   }
 
   /** Tira um pedido da fila, se ainda não começou. */
   remove(id: string): boolean {
-    const i = this.pending.indexOf(id);
-    if (i < 0) return false;
-    this.pending.splice(i, 1);
-    return true;
+    for (const list of [this.priority, this.pending]) {
+      const i = list.indexOf(id);
+      if (i >= 0) {
+        list.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Para de pegar pedidos novos e espera o atual terminar. */
@@ -107,7 +143,7 @@ export class JobQueue {
 
   private kick(): void {
     if (this.running || this.stopped) return;
-    const id = this.pending.shift();
+    const id = this.priority.shift() ?? this.pending.shift();
     if (!id) return;
     this.running = id;
     this.idle = new Promise((resolve) => (this.finishIdle = resolve));
@@ -140,9 +176,10 @@ export class JobQueue {
       const output = outputFile(this.cfg, id);
       const result = await renderVideo({
         ...req,
-        platform: getPlatform(req.platform),
+        platform: scaledPlatform(req.platform, req.scale),
         assets: this.cfg.assets,
         output,
+        encode: req.encode,
         onProgress,
       });
       const bytes = (await stat(output)).size;
@@ -187,6 +224,11 @@ export class JobQueue {
     } finally {
       // As entradas não são mais necessárias: só o vídeo final fica guardado até expirar.
       await rm(inputDir(this.cfg, id), { recursive: true, force: true });
+      try {
+        this.onFinished(id);
+      } catch (err) {
+        this.log.error({ job: id, err }, "falha ao agendar o aviso");
+      }
     }
   }
 }

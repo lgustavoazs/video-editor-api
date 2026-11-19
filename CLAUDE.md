@@ -22,12 +22,17 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `clip.ts`: trecho, rotação, HDR para SDR e ramo de vídeo dos clipes (enquadramento feito no FFmpeg).
   - `filters.ts`, `text.ts`, `filtergraph.ts`: tradução do preset para o filter_complex.
   - `render.ts`: `planRender` (valida, sonda e calcula a linha do tempo, sem renderizar) e `renderVideo` (executa o FFmpeg, com progresso via `-progress pipe:1`). `cli/`: ferramenta de amostras e arquivos de teste.
-- `apps/api/src` (Fase 2A):
-  - `app.ts`: rotas Fastify (`/v1/videos`, `/v1/presets`, `/v1/platforms`, `/v1/admin/*`) e o `submit` (valida, planeja, enfileira).
+- `apps/api/src`:
+  - `app.ts`: rotas Fastify (`/v1/videos`, `/v1/previews`, `/v1/presets`, `/v1/platforms`, `/v1/audio`, `/v1/admin/*`) e o `submit` (valida, planeja, enfileira).
   - `upload.ts` + `sniff.ts`: multipart gravado direto no disco; tipo pelo conteúdo (assinatura), limites por tipo; HEIC recusado com 415.
   - `options.ts`: JSON Schema do campo `options` (mensagens em português). `presets.ts`: biblioteca em memória e `overrides` (lista branca, revalidada pelo schema do preset).
   - `jobs.ts`: fila em processo (um render por vez), recuperação após reinício, limpeza por TTL. `db.ts`: SQLite (`node:sqlite`) em `DATA_DIR`.
-  - `keys.ts`: chaves `vea_...` guardadas como sha256, limite por minuto. `errors.ts`: formato único de erro e mapeamento dos códigos do motor (regra = 422, servidor = 500).
+  - `keys.ts`: chaves `vea_...` guardadas como sha256 e segredo de webhook `whsec_...` por chave; limite por minuto. `errors.ts`: formato único de erro e mapeamento dos códigos do motor (regra = 422, servidor = 500).
+  - `webhook.ts`: aviso em `done`/`failed`, HMAC-SHA256 (`t=..,v1=..`), 3 novas tentativas persistidas no SQLite; só https e destino público.
+  - `audio.ts`: catálogo `audio/library.json` (por `libraryId` ou `mood` + `seed`); catálogo inválido impede o servidor de iniciar.
+  - `docs.ts`: OpenAPI 3.1 escrito à mão + Swagger UI em `/docs` (público). Toda rota nova precisa entrar aqui: um teste confere.
+  - Pré-visualização: `kind = "preview"`, metade da resolução, `veryfast`, até 6 itens e 10 s, prioridade na fila.
+- `audio/`: biblioteca de músicas (começa vazia; poucas faixas no repositório, só com licença para uso comercial).
 - `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais. LUTs em `presets/luts/`.
 - `assets/fonts`: fontes DejaVu (licença livre) para o texto renderizar igual em qualquer máquina.
 - Planejado: `apps/web` (Next.js com editor visual de presets, na Vercel).
@@ -51,8 +56,8 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 0. Spike: concluída.
 1A. Motor base: concluída.
 1C. Clipes de vídeo: concluída.
-2A. API (esta): upload, fila, chaves, consulta e download, administração, limpeza por TTL.
-2B. API: webhook (HMAC), `/v1/previews`, biblioteca de áudio (id ou mood), OpenAPI em `/docs`.
+2A. API: concluída (upload, fila, chaves, consulta e download, administração, limpeza por TTL).
+2B. API (esta): webhook (HMAC, segredo por chave), `/v1/previews` com prioridade, biblioteca de áudio (id ou mood), OpenAPI pública em `/docs`.
 3. Site: upload, seletor de trecho com forma de onda, editor visual de presets (exporta JSON).
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
@@ -66,6 +71,8 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - HDR testado só com clipes sintéticos (PQ e HLG); falta um clipe real de iPhone (HLG com Dolby Vision).
 - Fotos HEIC (padrão do iPhone) são recusadas com 415: o sharp pré-compilado não lê HEIC. Avaliar conversão no futuro.
 - Fila e limite por minuto ficam em memória: valem para uma instância só (suficiente na V1).
+- Arquivos de música no repositório servem para poucas faixas; se a biblioteca crescer, mover para o volume com upload pela administração.
+- A chave criada antes da 2B não tem segredo de webhook: gerar com `POST /v1/admin/keys/:id/webhook-secret`.
 - As chaves de teste que passaram pelo chat (token do spike e a `ADMIN_KEY` inicial) devem ser trocadas antes do uso público.
 
 ## Comandos

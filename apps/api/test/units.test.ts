@@ -39,12 +39,12 @@ describe("opções", () => {
     assert.throws(() => referencedFiles(o), /já é usado/);
   });
 
-  test("rejeita papel de logo repetido e callback sem https", () => {
+  test("rejeita papel de logo repetido e callback que não é endereço web", () => {
     assert.throws(
       () => parseOptions(JSON.stringify({ items: [{ file: "a" }], logos: [{ role: "brand", file: "b" }, { role: "brand", file: "c" }] })),
       /uma vez só/,
     );
-    assert.throws(() => parseOptions(JSON.stringify({ items: [{ file: "a" }], callbackUrl: "http://x" })), /https/);
+    assert.throws(() => parseOptions(JSON.stringify({ items: [{ file: "a" }], callbackUrl: "ftp://x" })), /https/);
   });
 
   test("tempo aceita número ou texto", () => {
@@ -72,5 +72,36 @@ describe("limite por minuto", () => {
     assert.equal(rl.hit("k", 1), 0);
     assert.ok(rl.hit("k", 2) > 0);
     assert.equal(rl.hit("k", 60_001), 0);
+  });
+});
+
+describe("banco criado na Fase 2A", () => {
+  test("ganha as colunas novas sem perder dados", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { DatabaseSync } = await import("node:sqlite");
+    const { Db } = await import("../src/db.js");
+    const dir = mkdtempSync(join(tmpdir(), "db-2a-"));
+    try {
+      const old = new DatabaseSync(join(dir, "api.sqlite"));
+      old.exec(`
+        CREATE TABLE api_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL,
+          created_at INTEGER NOT NULL, revoked_at INTEGER, last_used_at INTEGER);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER, expires_at INTEGER, request_json TEXT NOT NULL,
+          result_json TEXT, error_json TEXT, warnings_json TEXT NOT NULL DEFAULT '[]', callback_url TEXT, output_bytes INTEGER);
+        INSERT INTO api_keys VALUES ('k1', 'gustavo', 'h', 'vea_ab', 1, NULL, NULL);
+        INSERT INTO jobs (id, key_id, status, created_at, request_json) VALUES ('j1', 'k1', 'done', 1, '{}');
+      `);
+      old.close();
+      const db = new Db(dir);
+      assert.equal(db.key("k1")!.webhook_secret, null);
+      assert.equal(db.job("j1")!.kind, "video");
+      assert.equal(db.job("j1")!.webhook_attempts, 0);
+      db.close();
+      new Db(dir).close(); // abrir de novo não tenta recriar as colunas
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

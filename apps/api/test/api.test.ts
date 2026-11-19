@@ -52,7 +52,7 @@ async function waitDone(id: string, url = `/v1/videos/${id}`, headers: Record<st
 before(async () => {
   assets = await makeTestAssets(TEST_ASSETS_DIR);
   dataDir = await mkdtemp(join(tmpdir(), "api-test-"));
-  cfg = { ...loadConfig({}), dataDir, adminKey: ADMIN, cleanupMinutes: 0, rateLimitPerMinute: 0, createLimitPerMinute: 0 };
+  cfg = { ...loadConfig({}), dataDir, adminKey: ADMIN, cleanupMinutes: 0, rateLimitPerMinute: 0, createLimitPerMinute: 0, selftestWarmup: false };
   api = await buildApp(cfg, { logger: false });
   const res = await api.app.inject({ method: "POST", url: "/v1/admin/keys", headers: { "x-admin-key": ADMIN }, payload: { name: "testes" } });
   assert.equal(res.statusCode, 201);
@@ -173,10 +173,6 @@ describe("validação do pedido", () => {
     assert.equal(res.json().error.code, "invalid_overrides");
   });
 
-  test("biblioteca de áudio ainda não disponível: 501", async () => {
-    const res = await postVideo({ items: [{ file: "foto" }], audio: { libraryId: "x" } }, { foto: assets.photos[0]! });
-    assert.equal(res.statusCode, 501);
-  });
 
   test("pedido rejeitado não deixa arquivos para trás", async () => {
     const jobs = await readdir(join(dataDir, "jobs"));
@@ -201,14 +197,12 @@ describe("render de ponta a ponta", () => {
         ],
         audio: { file: "musica", start: 0, duration: 8 },
         overrides: { transition: { type: "wipeleft", duration: 0.4 } },
-        callbackUrl: "https://exemplo.com/aviso",
       },
       { f1: assets.photos[0]!, f2: assets.photos[1]!, c1: assets.clips.landscape, musica: assets.tone, sobra: assets.photos[2]! },
     );
     assert.equal(res.statusCode, 202, res.body);
     const created = res.json();
     assert.ok(created.warnings.some((w: string) => w.includes("sobra")), "avisa do arquivo não usado");
-    assert.ok(created.warnings.some((w: string) => w.includes("callbackUrl")));
 
     const done = await waitDone(created.id);
     assert.equal(done.status, "done", JSON.stringify(done.error));
