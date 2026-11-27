@@ -13,6 +13,7 @@ const EMPTY: Draft = {
   title: "",
   items: [],
   music: { kind: "none", duration: 15 },
+  fades: {},
   logos: {},
 };
 
@@ -31,7 +32,8 @@ export function NewVideo({ onCreated, onShowList }: { onCreated: () => void; onS
   useEffect(() => {
     Promise.all([api.presets(), api.platforms(), api.audio()])
       .then(([p, pl, a]) => {
-        setPresets(p);
+        // O neutro (padrão) primeiro; os demais em ordem alfabética, como vêm da API.
+        setPresets([...p.filter((x) => x.id === EMPTY.preset), ...p.filter((x) => x.id !== EMPTY.preset)]);
         setPlatforms(pl);
         setTracks(a.tracks);
         if (p.length && !p.some((x) => x.id === EMPTY.preset)) setDraft((d) => ({ ...d, preset: p[0]!.id }));
@@ -146,7 +148,15 @@ export function NewVideo({ onCreated, onShowList }: { onCreated: () => void; onS
 
       <ItemsPanel items={draft.items} onChange={(items) => setDraft((d) => ({ ...d, items }))} onEdit={setEditing} />
 
-      <MusicPanel music={draft.music} onChange={(music) => setDraft((d) => ({ ...d, music }))} maxDuration={maxDuration} tracks={tracks} />
+      <MusicPanel
+        music={draft.music}
+        onChange={(music) => setDraft((d) => ({ ...d, music }))}
+        fades={draft.fades}
+        onFades={(fades) => setDraft((d) => ({ ...d, fades }))}
+        presetAudio={presetDetail?.audio as { fadeIn?: number; fadeOut?: number } | undefined}
+        maxDuration={maxDuration}
+        tracks={tracks}
+      />
 
       <LogosPanel logos={draft.logos} onChange={(logos) => setDraft((d) => ({ ...d, logos }))} branding={presetDetail?.branding} />
 

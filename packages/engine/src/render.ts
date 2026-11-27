@@ -29,12 +29,20 @@ import { computeTiming, resolveAudioSegment, type AudioSegmentInput, type Timing
 import { assertTransitionsSupported, pickTransitions } from "./transitions.js";
 
 export const MAX_ITEMS = 30;
+/** Aproximação máxima do enquadramento de um item. */
+export const MAX_ITEM_ZOOM = 4;
 
 export interface RenderItem extends ClipRangeInput {
   type: "photo" | "clip";
   file: string;
   /** Ponto de interesse (0 a 1 em cada eixo), usado no corte. */
   focus?: Focus;
+  /**
+   * Aproximação do enquadramento, de 1 (sem zoom) a 4: mostra uma área menor da foto ou do
+   * clipe, centrada no ponto de interesse. Acima de 1 força o corte, mesmo em estilos que
+   * mostram a foto inteira.
+   */
+  zoom?: number;
   /** Legenda exibida sobre o item, se o preset tiver estilo de legenda. */
   caption?: string;
   /** Só clipes: mistura o som original do clipe à música. Padrão: false (mudo). */
@@ -127,6 +135,9 @@ function validateRequest(req: PlanRequest): void {
         throw new EngineError("invalid_item", `items[${i}].focus: x e y devem estar entre 0 e 1`, { item: i });
       }
     }
+    if (item.zoom !== undefined && !(typeof item.zoom === "number" && item.zoom >= 1 && item.zoom <= MAX_ITEM_ZOOM)) {
+      throw new EngineError("invalid_item", `items[${i}].zoom: deve estar entre 1 e ${MAX_ITEM_ZOOM}`, { item: i });
+    }
     if (item.caption !== undefined && cleanText(item.caption).length > MAX_CAPTION_LENGTH) {
       throw new EngineError("text_too_long", `items[${i}].caption: máximo de ${MAX_CAPTION_LENGTH} caracteres`, {
         item: i,
@@ -196,6 +207,7 @@ interface PlannedClip {
   length: number;
   fit: "cover" | "contain";
   focus: Focus;
+  zoom: number;
   hdr: boolean;
   audio?: { volume: number };
 }
@@ -264,7 +276,8 @@ export async function planRender(req: PlanRequest): Promise<RenderPlan> {
     }
     const range = resolveClipRange(item, info.duration, i);
     const size = displaySize(info);
-    const fit = resolveFit(preset.photo, coverLoss(size.width, size.height, W, H), item.focus !== undefined);
+    const zoom = item.zoom ?? 1;
+    const fit = zoom > 1 ? "cover" : resolveFit(preset.photo, coverLoss(size.width, size.height, W, H), item.focus !== undefined);
     let hdr = isHdr(info);
     if (hdr && !canToneMap) {
       warnings.push(`O clipe ${i + 1} é HDR, mas o FFmpeg instalado não converte HDR; as cores podem sair lavadas.`);
@@ -276,7 +289,7 @@ export async function planRender(req: PlanRequest): Promise<RenderPlan> {
       else warnings.push(`O clipe ${i + 1} não tem som; o pedido para manter o som original foi ignorado.`);
     }
     clipPlans.set(i, {
-      item: i, info, ...range, fit, hdr, audio,
+      item: i, info, ...range, fit, hdr, audio, zoom,
       focus: fit === "cover" ? (item.focus ?? { x: 0.5, y: 0.5 }) : { x: 0.5, y: 0.5 },
     });
   }
@@ -412,14 +425,14 @@ export async function renderVideo(req: RenderRequest): Promise<RenderResult> {
         segments.push({
           kind: "clip",
           frames: timing.clipFrames[clipIndex++]!,
-          video: { fit: clip.fit, focus: clip.focus, hdr: clip.hdr, info: clip.info },
+          video: { fit: clip.fit, focus: clip.focus, zoom: clip.zoom, hdr: clip.hdr, info: clip.info },
           captionFile,
           audio: clip.audio,
         });
       } else {
         const file = join(workDir, `foto-${String(i).padStart(3, "0")}.jpg`);
         const prepared = await preparePhoto(
-          item.file, file, Math.round(W * supersample), Math.round(H * supersample), preset.photo, item.focus,
+          item.file, file, Math.round(W * supersample), Math.round(H * supersample), preset.photo, item.focus, item.zoom,
         );
         fits.push(prepared.fit);
         const zoom = zoomRange(preset.motion, photoIndex);

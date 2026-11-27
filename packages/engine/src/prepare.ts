@@ -67,15 +67,17 @@ export async function preparePhoto(
   frameH: number,
   photo: Preset["photo"],
   focus?: Focus,
+  zoom = 1,
 ): Promise<PreparedPhoto> {
   try {
     const size = await orientedSize(input);
-    const fit = resolveFit(photo, coverLoss(size.width, size.height, frameW, frameH), focus !== undefined);
+    // Zoom acima de 1 é uma área escolhida pelo usuário: sempre corta.
+    const fit = zoom > 1 ? "cover" : resolveFit(photo, coverLoss(size.width, size.height, frameW, frameH), focus !== undefined);
     const open = () => sharp(input, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS }).rotate();
     const jpeg = { quality: 92, chromaSubsampling: "4:4:4" } as const;
 
     if (fit === "cover") {
-      const scale = Math.max(frameW / size.width, frameH / size.height);
+      const scale = Math.max(frameW / size.width, frameH / size.height) * zoom;
       const scaledW = Math.max(frameW, Math.round(size.width * scale));
       const scaledH = Math.max(frameH, Math.round(size.height * scale));
       const fx = focus?.x ?? 0.5;

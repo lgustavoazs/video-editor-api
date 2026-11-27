@@ -1,0 +1,77 @@
+{
+  "id": "preto-e-branco",
+  "version": 1,
+  "name": "Preto e branco",
+  "extends": "limpo",
+  "description": "Preto e branco com contraste forte, vinheta leve e grão fino. Sóbrio e elegante; transições em fade pelo preto.",
+  "photo": {
+    "fit": "auto",
+    "filters": [
+      {
+        "type": "grayscale",
+        "amount": 1
+      },
+      {
+        "type": "curves",
+        "preset": "medium_contrast"
+      },
+      {
+        "type": "clarity",
+        "amount": 0.4
+      },
+      {
+        "type": "vignette",
+        "strength": 0.3
+      },
+      {
+        "type": "grain",
+        "amount": 8
+      }
+    ]
+  },
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.0,
+    "zoomTo": 1.1,
+    "direction": "alternate"
+  },
+  "transition": {
+    "types": [
+      "fadeblack",
+      "fade"
+    ],
+    "order": "cycle",
+    "duration": 0.7
+  },
+  "audio": {
+    "fadeIn": 1.0,
+    "fadeOut": 2.0
+  },
+  "text": {
+    "title": {
+      "position": "bottom",
+      "size": 0.045,
+      "start": 0.5,
+      "duration": 3.5
+    },
+    "caption": {
+      "position": "bottom",
+      "size": 0.03
+    }
+  },
+  "branding": {
+    "watermark": {
+      "role": "brand",
+      "position": "top-right",
+      "width": 0.15,
+      "opacity": 0.9
+    },
+    "outro": {
+      "role": "partner",
+      "duration": 2.0,
+      "background": "#000000",
+      "width": 0.5,
+      "caption": "Apoio"
+    }
+  }
+}

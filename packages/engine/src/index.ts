@@ -35,6 +35,7 @@ export type { Focus } from "./prepare.js";
 export {
   defaultThreads,
   MAX_ITEMS,
+  MAX_ITEM_ZOOM,
   planRender,
   renderVideo,
   type PlanRequest,

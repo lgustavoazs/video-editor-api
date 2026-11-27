@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { cropLoss, cropRect, formatTime, parseTime, round3, type DraftItem } from "./lib.ts";
+import { useEffect, useRef, type PointerEvent } from "react";
+import { cropLoss, cropRect, formatTime, MAX_ZOOM, round3, type DraftItem } from "./lib.ts";
+import { TimeField } from "./MusicPanel.tsx";
 
 interface Props {
   item: DraftItem;
@@ -34,9 +35,13 @@ export function ItemEditor({ item, index, aspect, photoConf, captions, onChange,
         </div>
         <p className="muted small ellipsis">{item.file.name}</p>
         {item.kind === "photo" ? (
-          <PhotoFocus item={item} aspect={aspect} photoConf={photoConf} onChange={onChange} />
+          <Framing item={item} aspect={aspect} photoConf={photoConf} onChange={onChange} />
         ) : (
-          <ClipTrim item={item} onChange={onChange} />
+          <>
+            <ClipTrim item={item} onChange={onChange} />
+            <h3>Área exibida</h3>
+            <Framing item={item} aspect={aspect} photoConf={photoConf} onChange={onChange} />
+          </>
         )}
         <label>
           Legenda (opcional)
@@ -58,15 +63,22 @@ export function ItemEditor({ item, index, aspect, photoConf, captions, onChange,
   );
 }
 
-function PhotoFocus({ item, aspect, photoConf, onChange }: Omit<Props, "index" | "onClose" | "captions">) {
+/**
+ * Enquadramento de foto ou clipe: moldura do que aparece no vídeo, ponto de interesse
+ * (tocar ou arrastar) e aproximação. Mesma regra do motor.
+ */
+function Framing({ item, aspect, photoConf, onChange }: Omit<Props, "index" | "onClose" | "captions">) {
   const box = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const w = item.width ?? 1;
   const h = item.height ?? 1;
-  const rect = cropRect(w, h, aspect, item.focus);
+  const zoom = item.zoom ?? 1;
+  const rect = cropRect(w, h, aspect, item.focus, zoom);
   const loss = cropLoss(w, h, aspect);
   const fit = photoConf?.fit ?? "cover";
   const threshold = photoConf?.autoThreshold ?? 0.35;
+  const whole = item.kind === "photo" ? "a foto inteira" : "o clipe inteiro";
+  const Subject = item.kind === "photo" ? "A foto" : "O clipe";
 
   const setFromPointer = (e: PointerEvent) => {
     const r = box.current!.getBoundingClientRect();
@@ -75,15 +87,16 @@ function PhotoFocus({ item, aspect, photoConf, onChange }: Omit<Props, "index" |
     onChange({ ...item, focus: { x: round3(x), y: round3(y) } });
   };
 
-  // Mesma regra do motor: "auto" mostra a foto inteira se o corte tiraria demais, a não ser que haja um ponto marcado.
+  // Mesma regra do motor: zoom sempre corta; sem zoom, "contain" mostra tudo e "auto" decide pelo
+  // quanto o corte tiraria (a não ser que haja um ponto marcado).
+  const showsWhole = zoom <= 1 && (fit === "contain" || (fit === "auto" && !item.focus && loss > threshold));
   let note: string;
-  if (loss < 0.01) note = "A foto já tem o formato do vídeo: nada é cortado.";
-  else if (fit === "contain") note = "Este estilo mostra a foto inteira, com fundo desfocado. O ponto marcado só centraliza o movimento.";
-  else if (fit === "auto" && !item.focus && loss > threshold)
-    note = "Este estilo vai mostrar a foto inteira, com fundo desfocado, porque o corte tiraria muito dela. Toque na foto para preferir o corte centrado no ponto escolhido.";
+  if (zoom > 1) note = `A área clara é o que aparece no vídeo, ampliada. Toque ou arraste para mover; use o controle para aproximar.`;
+  else if (loss < 0.01) note = `${Subject} já tem o formato do vídeo: nada é cortado. Use o controle abaixo para aproximar uma área.`;
+  else if (fit === "contain") note = `Este estilo mostra ${whole}, com fundo desfocado. Aproxime para escolher uma área.`;
+  else if (showsWhole)
+    note = `Este estilo vai mostrar ${whole}, com fundo desfocado, porque o corte tiraria muito. Toque para preferir o corte centrado no ponto, ou aproxime.`;
   else note = "A área clara é o que aparece no vídeo. Toque ou arraste sobre o assunto principal para centralizar o corte.";
-
-  const showFrame = loss >= 0.01 && fit !== "contain" && !(fit === "auto" && !item.focus && loss > threshold);
 
   return (
     <div>
@@ -99,8 +112,13 @@ function PhotoFocus({ item, aspect, photoConf, onChange }: Omit<Props, "index" |
         onPointerMove={(e) => dragging.current && setFromPointer(e)}
         onPointerUp={() => (dragging.current = false)}
       >
-        <img src={item.url} alt="" draggable={false} />
-        {showFrame && (
+        {item.kind === "photo" ? (
+          <img src={item.url} alt="" draggable={false} />
+        ) : (
+          // Quadro do início do trecho, parado, só para enquadrar.
+          <video src={`${item.url}#t=${item.start ?? 0}`} muted playsInline preload="auto" />
+        )}
+        {!showsWhole && loss + (zoom - 1) > 0.01 && (
           <div
             className="crop-frame"
             style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` }}
@@ -109,9 +127,24 @@ function PhotoFocus({ item, aspect, photoConf, onChange }: Omit<Props, "index" |
         {item.focus && <div className="focus-dot" style={{ left: `${item.focus.x * 100}%`, top: `${item.focus.y * 100}%` }} />}
       </div>
       <p className="muted small">{note}</p>
-      {item.focus && (
-        <button className="link" onClick={() => onChange({ ...item, focus: undefined })}>
-          Voltar ao centro
+      <label>
+        Aproximar: {Math.round(zoom * 100)}%
+        <input
+          type="range"
+          min={1}
+          max={MAX_ZOOM}
+          step={0.05}
+          value={zoom}
+          aria-label="Aproximar"
+          onChange={(e) => {
+            const z = Number(e.target.value);
+            onChange({ ...item, zoom: z > 1.001 ? z : undefined });
+          }}
+        />
+      </label>
+      {(item.focus || zoom > 1) && (
+        <button className="link" onClick={() => onChange({ ...item, focus: undefined, zoom: undefined })}>
+          Voltar ao enquadramento original
         </button>
       )}
     </div>
@@ -123,12 +156,7 @@ function ClipTrim({ item, onChange }: { item: DraftItem; onChange: (item: DraftI
   const total = item.sourceDuration ?? 0;
   const start = item.start ?? 0;
   const end = item.end ?? total;
-  const [startText, setStartText] = useState(formatTime(start, 1));
-  const [endText, setEndText] = useState(formatTime(end, 1));
   const stopAt = useRef<number | null>(null);
-
-  useEffect(() => setStartText(formatTime(start, 1)), [start]);
-  useEffect(() => setEndText(formatTime(end, 1)), [end]);
 
   const set = (s: number, e: number) => {
     s = Math.max(0, Math.min(s, total));
@@ -152,7 +180,8 @@ function ClipTrim({ item, onChange }: { item: DraftItem; onChange: (item: DraftI
       <video
         ref={video}
         className="clip-player"
-        src={item.url}
+        // #t: o navegador já mostra o quadro do início do trecho, em vez de uma tela preta.
+        src={`${item.url}#t=${item.start ?? 0}`}
         controls
         playsInline
         preload="metadata"
@@ -164,35 +193,11 @@ function ClipTrim({ item, onChange }: { item: DraftItem; onChange: (item: DraftI
         }}
       />
       <div className="row">
-        <label className="grow">
-          Início
-          <input
-            inputMode="decimal"
-            value={startText}
-            onChange={(e) => setStartText(e.target.value)}
-            onBlur={() => {
-              const v = parseTime(startText);
-              if (v === undefined) setStartText(formatTime(start, 1));
-              else set(v, end);
-            }}
-          />
-        </label>
+        <TimeField label="Início" value={start} onCommit={(v) => set(v, end)} />
         <button onClick={() => set(current(), end)}>Início aqui</button>
       </div>
       <div className="row">
-        <label className="grow">
-          Fim
-          <input
-            inputMode="decimal"
-            value={endText}
-            onChange={(e) => setEndText(e.target.value)}
-            onBlur={() => {
-              const v = parseTime(endText);
-              if (v === undefined) setEndText(formatTime(end, 1));
-              else set(start, v);
-            }}
-          />
-        </label>
+        <TimeField label="Fim" value={end} onCommit={(v) => set(start, v)} />
         <button onClick={() => set(start, current())}>Fim aqui</button>
       </div>
       <p className={length < 1 ? "error small" : "muted small"}>

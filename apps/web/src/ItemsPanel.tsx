@@ -23,9 +23,13 @@ interface Props {
 /** Fotos e clipes: adicionar, ordenar arrastando, remover e abrir o ajuste de cada um. */
 export function ItemsPanel({ items, onChange, onEdit }: Props) {
   const input = useRef<HTMLInputElement>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const [busy, setBusy] = useState("");
   const [problems, setProblems] = useState<string[]>([]);
-  const [dragOver, setDragOver] = useState(false);
+  /** Posição onde os arquivos arrastados do computador vão entrar (null = nenhum arraste). */
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const grid = useRef<HTMLOListElement>(null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -34,7 +38,7 @@ export function ItemsPanel({ items, onChange, onEdit }: Props) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  async function addFiles(list: FileList | File[]) {
+  async function addFiles(list: FileList | File[], at = items.length) {
     const files = naturalSort(Array.from(list));
     const added: DraftItem[] = [];
     const errors: string[] = [];
@@ -68,7 +72,10 @@ export function ItemsPanel({ items, onChange, onEdit }: Props) {
     }
     setBusy("");
     setProblems(errors);
-    if (added.length) onChange([...items, ...added]);
+    if (added.length) {
+      // Usa a lista atual (o usuário pode ter mexido durante a leitura).
+      onChange([...itemsRef.current.slice(0, at), ...added, ...itemsRef.current.slice(at)]);
+    }
   }
 
   function onDragEnd(e: DragEndEvent) {
@@ -84,10 +91,31 @@ export function ItemsPanel({ items, onChange, onEdit }: Props) {
     onChange(items.filter((i) => i.id !== id));
   }
 
-  const onDrop = (e: DragEvent) => {
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+
+  /** Posição de inserção pelo ponto do arraste: antes do primeiro quadro que está depois do ponteiro. */
+  function indexAt(x: number, y: number): number {
+    const tiles = Array.from(grid.current?.querySelectorAll<HTMLElement>(".tile") ?? []);
+    for (const [i, el] of tiles.entries()) {
+      const r = el.getBoundingClientRect();
+      if (y < r.top) return i;
+      if (y <= r.bottom && x < r.left + r.width / 2) return i;
+    }
+    return tiles.length;
+  }
+
+  const onDragOver = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
     e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files);
+    e.dataTransfer.dropEffect = "copy";
+    setDropAt(items.length ? indexAt(e.clientX, e.clientY) : 0);
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const at = dropAt ?? items.length;
+    setDropAt(null);
+    if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files, at);
   };
 
   return (
@@ -96,22 +124,21 @@ export function ItemsPanel({ items, onChange, onEdit }: Props) {
         <h2>Fotos e clipes</h2>
         <span className="muted small">{items.length ? `${items.length} item(ns)` : ""}</span>
       </div>
-      <div
-        className={dragOver ? "dropzone over" : "dropzone"}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-        onClick={() => input.current?.click()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
-      >
-        <strong>Adicionar fotos e clipes</strong>
-        <span className="muted small">Toque para escolher ou arraste os arquivos para cá</span>
-      </div>
+      {items.length === 0 && (
+        <div
+          className={dropAt !== null ? "dropzone over" : "dropzone"}
+          onDragOver={onDragOver}
+          onDragLeave={() => setDropAt(null)}
+          onDrop={onDrop}
+          onClick={() => input.current?.click()}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
+        >
+          <strong>Adicionar fotos e clipes</strong>
+          <span className="muted small">Toque para escolher ou arraste os arquivos para cá</span>
+        </div>
+      )}
       <input
         ref={input}
         type="file"
@@ -134,22 +161,38 @@ export function ItemsPanel({ items, onChange, onEdit }: Props) {
         <>
           <p className="muted small hint">
             A ordem abaixo é a ordem do vídeo. Arraste para mudar (no celular, segure um instante antes) ou use as setas.
-            Toque num item para ajustar o corte, a legenda ou o trecho do clipe.
+            Para incluir mais, use o quadro + ou arraste arquivos do computador para o ponto da lista onde devem entrar.
+            Toque num item para ajustar o enquadramento, a legenda ou o trecho do clipe.
           </p>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={items.map((i) => i.id)} strategy={rectSortingStrategy}>
-              <ol className="grid">
+              <ol
+                ref={grid}
+                className={dropAt !== null ? "grid receiving" : "grid"}
+                onDragOver={onDragOver}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropAt(null);
+                }}
+                onDrop={onDrop}
+              >
                 {items.map((it, index) => (
                   <Tile
                     key={it.id}
                     item={it}
                     index={index}
                     last={index === items.length - 1}
+                    insertBefore={dropAt === index}
                     onEdit={() => onEdit(it.id)}
                     onRemove={() => remove(it.id)}
                     onMove={(delta) => onChange(moveItem(items, index, index + delta))}
                   />
                 ))}
+                <li className={dropAt === items.length ? "tile add insert-before" : "tile add"}>
+                  <button className="add-button" onClick={() => input.current?.click()} aria-label="Adicionar fotos e clipes">
+                    <span className="plus">+</span>
+                    <span className="small">Adicionar</span>
+                  </button>
+                </li>
               </ol>
             </SortableContext>
           </DndContext>
@@ -163,6 +206,8 @@ function Tile(props: {
   item: DraftItem;
   index: number;
   last: boolean;
+  /** Mostra a marca de inserção antes deste quadro (arquivos sendo arrastados). */
+  insertBefore: boolean;
   onEdit: () => void;
   onRemove: () => void;
   onMove: (delta: number) => void;
@@ -172,7 +217,7 @@ function Tile(props: {
   const style = { transform: CSS.Transform.toString(transform), transition };
   const clipLength = item.kind === "clip" ? (item.end ?? 0) - (item.start ?? 0) : 0;
   return (
-    <li ref={setNodeRef} style={style} className={isDragging ? "tile dragging" : "tile"}>
+    <li ref={setNodeRef} style={style} className={["tile", isDragging && "dragging", props.insertBefore && "insert-before"].filter(Boolean).join(" ")}>
       <div className="thumb" {...attributes} {...listeners} onClick={props.onEdit} aria-label={`Item ${index + 1}: ${item.file.name}`}>
         {item.kind === "photo" ? (
           <img src={item.url} alt="" draggable={false} />

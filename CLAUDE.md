@@ -38,7 +38,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `NewVideo.tsx` (tela principal), `ItemsPanel.tsx` (envio e ordem com dnd-kit), `ItemEditor.tsx` (foco e moldura do corte; trecho do clipe), `MusicPanel.tsx` (wavesurfer com região do trecho), `LogosPanel.tsx`, `JobView.tsx`, `MyVideos.tsx`.
   - `media.ts`: HEIC → JPEG com `heic-to/csp` (LGPL; carregado só quando aparece HEIC, em arquivo separado).
 - `audio/`: biblioteca de músicas (começa vazia; poucas faixas no repositório, só com licença para uso comercial).
-- `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais. LUTs em `presets/luts/`.
+- `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais (`cinema`, `dinamico`, `retro-quente`, `preto-e-branco`, todos com `extends: limpo`). LUTs em `presets/luts/`. Cuidado com grão forte e transições de pontilhado (`dissolve`): multiplicam o tamanho do arquivo.
 - `assets/fonts`: fontes DejaVu (licença livre) para o texto renderizar igual em qualquer máquina.
 - Hospedagem do site: decidido servir pela própria API na Railway (não na Vercel): upload grande sem limite da Vercel e sem chave no navegador.
 
@@ -51,6 +51,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 - Tudo é quantizado em quadros; a duração final é exata.
 - Fotos demais para a duração: erro `too_many_photos` informando o máximo. Nunca descartar fotos em silêncio.
 - Enquadramento `auto`: usa `contain` (fundo desfocado) quando o corte removeria mais que `autoThreshold` da foto; um `focus` informado força o corte.
+- `zoom` por item (1 a 4, `MAX_ITEM_ZOOM`): janela de corte menor, centrada no foco; acima de 1 força o corte sempre (inclusive em `fit: contain`). Fotos: escala maior no sharp. Clipes: recorta no tamanho original e depois amplia (evita imagens enormes no FFmpeg).
 - Texto e marca d'água respeitam a zona segura da plataforma (`platforms.ts`). A marca d'água não aparece sobre os cartões.
 - Trecho do áudio: `start` + (`end` ou `duration`, mutuamente exclusivos); corte com recodificação; `loop` repete o trecho.
 - Erros de regra usam `EngineError` com `code` estável (a API devolve 422 para regras e 500 para falhas do servidor).
@@ -63,7 +64,8 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 1C. Clipes de vídeo: concluída.
 2A. API: concluída (upload, fila, chaves, consulta e download, administração, limpeza por TTL).
 2B. API: concluída (webhook, `/v1/previews`, biblioteca de áudio, OpenAPI pública em `/docs`).
-3A. Site (esta): login, criar vídeo (ordem, foco, trecho do clipe, música com forma de onda, logos), progresso, Meus vídeos; funciona no celular.
+3A. Site: concluída (login, criar vídeo, progresso, Meus vídeos; celular).
+3A.1. Ajustes do site (esta): perfil Instagram feed (4:5); estilos Cinema, Dinâmico, Retrô quente e Preto e branco; quadro + e soltar arquivos na posição; área exibida com zoom em fotos e clipes; início e fim da música.
 3B. Editor visual de presets (exporta JSON), com prévia aproximada e amostra real por `/v1/previews`.
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
@@ -79,7 +81,9 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Fila e limite por minuto ficam em memória: valem para uma instância só (suficiente na V1).
 - Arquivos de música no repositório servem para poucas faixas; se a biblioteca crescer, mover para o volume com upload pela administração.
 - `heic-to` (conversão de HEIC no navegador) é LGPL-3.0; para uso comercial, manter como arquivo separado e citar a licença (ou trocar a solução).
-- O preset Limpo não tem título, legenda nem logos: o site avisa; esses recursos aparecem com os presets por nicho.
+- O preset Limpo não tem título, legenda nem logos (o site avisa); os outros quatro têm.
+- Os estilos genéricos (versão 1) aguardam a aprovação do dono pelas amostras; ajustes finos podem vir com o editor (3B).
+- O servidor registra os arquivos do site ao iniciar: depois de recompilar o site, reinicie a API (em produção o deploy já faz isso).
 - A chave criada antes da 2B não tem segredo de webhook: gerar com `POST /v1/admin/keys/:id/webhook-secret`.
 - As chaves de teste que passaram pelo chat (token do spike e a `ADMIN_KEY` inicial) devem ser trocadas antes do uso público.
 
