@@ -65,7 +65,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 2A. API: concluída (upload, fila, chaves, consulta e download, administração, limpeza por TTL).
 2B. API: concluída (webhook, `/v1/previews`, biblioteca de áudio, OpenAPI pública em `/docs`).
 3A. Site: concluída (login, criar vídeo, progresso, Meus vídeos; celular).
-3A.1. Ajustes do site (esta): perfil Instagram feed (4:5); estilos Cinema, Dinâmico, Retrô quente e Preto e branco; quadro + e soltar arquivos na posição; área exibida com zoom em fotos e clipes; início e fim da música.
+3A.1. Ajustes do site: concluída: perfil Instagram feed (4:5); estilos Cinema, Dinâmico, Retrô quente e Preto e branco; quadro + e soltar arquivos na posição; área exibida com zoom em fotos e clipes; início e fim da música.
 3B. Editor visual de presets (exporta JSON), com prévia aproximada e amostra real por `/v1/previews`.
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
@@ -82,7 +82,7 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Arquivos de música no repositório servem para poucas faixas; se a biblioteca crescer, mover para o volume com upload pela administração.
 - `heic-to` (conversão de HEIC no navegador) é LGPL-3.0; para uso comercial, manter como arquivo separado e citar a licença (ou trocar a solução).
 - O preset Limpo não tem título, legenda nem logos (o site avisa); os outros quatro têm.
-- Os estilos genéricos (versão 1) aguardam a aprovação do dono pelas amostras; ajustes finos podem vir com o editor (3B).
+- Os estilos genéricos (versão 1) foram aprovados pelo dono pelas amostras em 2026-11-27; ajustes finos podem vir com o editor (3B).
 - O servidor registra os arquivos do site ao iniciar: depois de recompilar o site, reinicie a API (em produção o deploy já faz isso).
 - A chave criada antes da 2B não tem segredo de webhook: gerar com `POST /v1/admin/keys/:id/webhook-secret`.
 - As chaves de teste que passaram pelo chat (token do spike e a `ADMIN_KEY` inicial) devem ser trocadas antes do uso público.
