@@ -1,0 +1,84 @@
+{
+  "id": "retro-quente",
+  "version": 1,
+  "name": "Retrô quente",
+  "extends": "limpo",
+  "description": "Tons quentes e desbotados de foto antiga, vinheta e grão. Movimento lento e fade suave. Bom para lembranças e homenagens.",
+  "photo": {
+    "fit": "auto",
+    "filters": [
+      {
+        "type": "curves",
+        "preset": "vintage"
+      },
+      {
+        "type": "color",
+        "brightness": 0.02,
+        "contrast": 1.05,
+        "saturation": 0.85,
+        "temperature": 0.25
+      },
+      {
+        "type": "sepia",
+        "amount": 0.2
+      },
+      {
+        "type": "vignette",
+        "strength": 0.4
+      },
+      {
+        "type": "grain",
+        "amount": 8
+      }
+    ]
+  },
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.0,
+    "zoomTo": 1.1,
+    "direction": "alternate"
+  },
+  "transition": {
+    "types": [
+      "fade",
+      "fadegrays"
+    ],
+    "order": "cycle",
+    "duration": 0.9
+  },
+  "timing": {
+    "perPhotoMin": 2.0,
+    "perPhotoMax": 7
+  },
+  "audio": {
+    "fadeIn": 1.5,
+    "fadeOut": 2.5
+  },
+  "text": {
+    "title": {
+      "position": "top",
+      "size": 0.05,
+      "start": 0.5,
+      "duration": 3.5
+    },
+    "caption": {
+      "position": "bottom",
+      "size": 0.03
+    }
+  },
+  "branding": {
+    "watermark": {
+      "role": "brand",
+      "position": "top-right",
+      "width": 0.14,
+      "opacity": 0.85
+    },
+    "outro": {
+      "role": "partner",
+      "duration": 2.2,
+      "background": "#1a120b",
+      "width": 0.5,
+      "caption": "Apoio"
+    }
+  }
+}

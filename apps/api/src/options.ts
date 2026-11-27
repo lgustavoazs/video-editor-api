@@ -37,6 +37,12 @@ export const optionsSchema = {
             required: ["x", "y"],
             properties: { x: { type: "number", minimum: 0, maximum: 1 }, y: { type: "number", minimum: 0, maximum: 1 } },
           },
+          zoom: {
+            type: "number",
+            minimum: 1,
+            maximum: 4,
+            description: "Aproximação do enquadramento (1 = sem zoom, até 4), centrada em focus. Acima de 1 sempre corta a imagem.",
+          },
           caption: { type: "string", maxLength: 500 },
           start: time,
           end: time,
@@ -146,6 +152,7 @@ export interface VideoOptions {
     file: string;
     type?: "photo" | "clip";
     focus?: { x: number; y: number };
+    zoom?: number;
     caption?: string;
     start?: Time;
     end?: Time;

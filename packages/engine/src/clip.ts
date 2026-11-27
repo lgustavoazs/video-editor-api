@@ -102,6 +102,8 @@ export interface ClipVideoInput {
   frames: number;
   fit: "cover" | "contain";
   focus: Focus;
+  /** Aproximação (1 = sem zoom). */
+  zoom?: number;
   /** Converter de HDR para SDR. */
   hdr: boolean;
   info: ClipInfo;
@@ -124,6 +126,21 @@ export function clipVideoParts(
   if (clip.hdr) pre.push(...hdrToSdr(clip.info));
   if (Math.abs(clip.info.sampleAspect - 1) > 1e-3) pre.push("scale=trunc(iw*sar/2)*2:ih", "setsar=1");
   pre.push("setpts=PTS-STARTPTS", `fps=${fps}`, "format=yuv420p");
+
+  if (clip.fit === "cover" && (clip.zoom ?? 1) > 1) {
+    // Com zoom: recorta primeiro, no tamanho do original, uma janela do formato do quadro
+    // reduzida pelo zoom e centrada no ponto; depois amplia para o quadro (evita imagens enormes).
+    const { x, y } = clip.focus;
+    const z = n(clip.zoom!, 4);
+    const cw = `trunc(min(iw,ih*${width}/${height})/${z}/2)*2`;
+    const ch = `trunc(min(ih,iw*${height}/${width})/${z}/2)*2`;
+    const crop = `crop=${quote(cw)}:${quote(ch)}:x=${quote(`max(0,min(iw-ow,${n(x)}*iw-ow/2))`)}:y=${quote(`max(0,min(ih-oh,${n(y)}*ih-oh/2))`)}`;
+    const label = `c${i}`;
+    return {
+      parts: [`[${i}:v]${[...pre, crop, `scale=${width}:${height}:flags=lanczos`, "setsar=1"].join(",")}[${label}]`],
+      label,
+    };
+  }
 
   if (clip.fit === "cover") {
     const { x, y } = clip.focus;

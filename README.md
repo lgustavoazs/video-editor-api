@@ -76,6 +76,18 @@ npm run sample -- --request pedido.json
 
 Cada estilo é um JSON em `presets/`, validado pelo schema em `packages/engine/src/schema.ts` (o mesmo que vai alimentar o editor visual). Um preset pode herdar de outro com `"extends": "limpo"` e sobrescrever só o que muda; `null` desliga um bloco herdado.
 
+Estilos disponíveis:
+
+| Estilo | Visual | Título, legenda e logos |
+|---|---|---|
+| `limpo` | Neutro: cores quase originais, zoom suave, fade | Não usa |
+| `cinema` | LUT azul e laranja, barras de cinema, vinheta, grão; fade e fade pelo preto | Título, legenda; marca d'água e abertura (marca), encerramento "Apoio" (parceiro) |
+| `dinamico` | Nitidez, clareza e cores vivas; deslocamento lateral; transições variadas e rápidas | Título, legenda; marca d'água (marca), encerramento "Apoio" (parceiro) |
+| `retro-quente` | Tons quentes e desbotados, vinheta, grão; fade lento | Título, legenda; marca d'água (marca), encerramento "Apoio" (parceiro) |
+| `preto-e-branco` | P&B com contraste, vinheta e grão fino; fade pelo preto | Título, legenda; marca d'água (marca), encerramento "Apoio" (parceiro) |
+
+Os presets por nicho virão depois, criados com a ficha de nicho.
+
 | Bloco | O que define |
 |---|---|
 | `photo` | Enquadramento (`cover`, `contain`, `auto`), fundo do `contain` e a lista de filtros: `color`, `curves`, `grayscale`, `sepia`, `lut`, `vignette`, `grain`, `blur`, `sharpen`, `clarity`. Vale também para os clipes |
@@ -96,8 +108,10 @@ Servido pela própria API, no mesmo endereço: `https://SEU-DOMINIO/app/` (a rai
 Tela **Novo vídeo**:
 
 - Fotos e clipes: escolher ou arrastar arquivos; **a ordem da lista é a ordem do vídeo** (arrastar para reordenar; no celular, segurar um instante antes; ou usar as setas).
-- Tocar num item: na foto, marcar o ponto de interesse (a moldura mostra o que fica no vídeo); no clipe, escolher início e fim assistindo e ligar o som original. Legenda por item.
-- Música: arquivo próprio ou da biblioteca, com o **trecho escolhido na forma de onda** (arrastar a faixa laranja; ouvir antes).
+- Para incluir mais itens: o quadro **+** no fim da lista, ou arrastar arquivos do computador **para o ponto da lista onde devem entrar** (uma barra laranja mostra a posição).
+- Tocar num item: **área exibida** da foto ou do clipe (tocar para centralizar a moldura e **aproximar** de 100% a 400%); no clipe, também início e fim assistindo e o som original. Legenda por item.
+- Música: arquivo próprio ou da biblioteca, com o **trecho escolhido na forma de onda** (arrastar a faixa laranja; ouvir antes) e o **início e o fim** da música: padrão do estilo, corte seco ou suave (0,5 a 3 s).
+- Plataformas: Reels do Instagram e do Facebook, TikTok e Shorts em 1080×1920; feed do Instagram e do Facebook em 1080×1350 (4:5).
 - Logos de marca e parceiro; a tela avisa se o estilo escolhido não usa a logo, a legenda ou o título.
 - Envio com progresso, acompanhamento da geração, player e download.
 - Fotos HEIC do iPhone: no próprio iPhone o Safari já entrega JPEG; HEIC arrastado no computador é convertido no navegador (a biblioteca de conversão, LGPL, só é baixada quando aparece um HEIC).
@@ -154,6 +168,7 @@ curl -X POST https://SEU-DOMINIO/v1/videos -H "Authorization: Bearer vea_..." \
 ```
 
 - Os arquivos são citados em `options` pelo **nome do campo**. O tipo é identificado pelo conteúdo: imagem vira foto, vídeo vira clipe (`type` é opcional).
+- `zoom` (por item, de 1 a 4): aproxima o enquadramento, centrado em `focus`. Acima de 1 sempre corta a imagem, mesmo em estilos que mostram a foto inteira.
 - **Ordem:** o vídeo segue a ordem da lista `items`. O nome dos arquivos e a ordem dos campos no multipart não influem; para mudar a ordem, mude a posição na lista.
 - **Logos** vão em `logos`, não em `items`. Uma logo colocada em `items` aparece como uma foto comum.
 - Sem `audio`, use `"timing":{"mode":"fixed","total":15}`.

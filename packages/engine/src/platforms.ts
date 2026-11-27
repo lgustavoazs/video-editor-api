@@ -51,6 +51,11 @@ const PROFILES: PlatformProfile[] = [
     id: "facebook_feed", width: 1080, height: 1350, fps: 30, maxDuration: 180,
     safeZone: { top: 0.04, bottom: 0.04, left: 0.04, right: 0.04 },
   },
+  {
+    // Feed do Instagram: 4:5 é o formato recomendado para vídeo no feed (Reels continuam em 9:16).
+    id: "instagram_feed", width: 1080, height: 1350, fps: 30, maxDuration: 180,
+    safeZone: { top: 0.04, bottom: 0.04, left: 0.04, right: 0.04 },
+  },
 ];
 
 export function listPlatforms(): PlatformProfile[] {

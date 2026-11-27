@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
 import { api, type Track } from "./api.ts";
-import { formatTime, LIMITS_MB, parseTime, round3, type MusicChoice } from "./lib.ts";
+import { FADE_CHOICES, formatTime, LIMITS_MB, parseTime, round3, type Draft, type MusicChoice } from "./lib.ts";
 
 interface Props {
   music: MusicChoice;
@@ -10,11 +10,15 @@ interface Props {
   /** Duração máxima da plataforma, em segundos. */
   maxDuration: number;
   tracks: Track[];
+  fades: Draft["fades"];
+  onFades: (f: Draft["fades"]) => void;
+  /** Entrada e saída definidas pelo estilo escolhido (o padrão). */
+  presetAudio?: { fadeIn?: number; fadeOut?: number };
 }
 
 const DEFAULT_SEGMENT = 30;
 
-export function MusicPanel({ music, onChange, maxDuration, tracks }: Props) {
+export function MusicPanel({ music, onChange, maxDuration, tracks, fades, onFades, presetAudio }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [lastFile, setLastFile] = useState<File | undefined>(music.kind === "file" ? music.file : undefined);
   const [fileError, setFileError] = useState("");
@@ -125,6 +129,23 @@ export function MusicPanel({ music, onChange, maxDuration, tracks }: Props) {
           onRange={(start, end) => onChange({ ...music, start, end })}
         />
       )}
+
+      {music.kind !== "none" && (
+        <div className="row wrap">
+          <FadeSelect
+            label="Início da música"
+            value={fades.fadeIn}
+            styleValue={presetAudio?.fadeIn}
+            onChange={(v) => onFades({ ...fades, fadeIn: v })}
+          />
+          <FadeSelect
+            label="Fim da música"
+            value={fades.fadeOut}
+            styleValue={presetAudio?.fadeOut}
+            onChange={(v) => onFades({ ...fades, fadeOut: v })}
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -220,22 +241,52 @@ function Segment(props: { url: string; start: number; end: number; maxDuration: 
   );
 }
 
-function TimeField({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+export function TimeField({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
   const [text, setText] = useState(formatTime(value, 1));
-  useEffect(() => setText(formatTime(value, 1)), [value]);
+  const editing = useRef(false);
+  // Atualiza o texto quando o valor muda por fora (forma de onda, outro campo), mas nunca
+  // enquanto a pessoa está digitando neste campo.
+  useEffect(() => {
+    if (!editing.current) setText(formatTime(value, 1));
+  }, [value]);
   return (
     <label className="grow">
       {label}
       <input
         inputMode="decimal"
         value={text}
+        onFocus={() => (editing.current = true)}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => {
+          editing.current = false;
           const v = parseTime(text);
           if (v === undefined) setText(formatTime(value, 1));
           else onCommit(v);
         }}
       />
+    </label>
+  );
+}
+
+const seconds = (v: number) => `${String(v).replace(".", ",")} s`;
+
+/** Entrada ou saída da música: padrão do estilo, corte seco ou suave com duração. */
+function FadeSelect(props: { label: string; value?: number; styleValue?: number; onChange: (v?: number) => void }) {
+  const describe = (v: number) => (v === 0 ? "Corte seco" : `Suave, ${seconds(v)}`);
+  return (
+    <label className="grow">
+      {props.label}
+      <select
+        value={props.value === undefined ? "" : String(props.value)}
+        onChange={(e) => props.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+      >
+        <option value="">Padrão do estilo{props.styleValue !== undefined ? ` (${describe(props.styleValue).toLowerCase()})` : ""}</option>
+        {FADE_CHOICES.map((v) => (
+          <option key={v} value={String(v)}>
+            {describe(v)}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

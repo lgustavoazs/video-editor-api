@@ -95,6 +95,25 @@ test("ramo de vídeo do clipe: corte com foco, foto inteira sobre fundo desfocad
   assert.match(solid.parts[0]!, /pad=1080:1920:\(ow-iw\)\/2:\(oh-ih\)\/2:color=0x112233/);
 });
 
+test("ramo de vídeo do clipe com zoom: recorta a área do formato do quadro, reduzida pelo zoom, e amplia", () => {
+  const photo = parsePreset({
+    id: "x", version: 1, name: "x", photo: {}, motion: { type: "none" },
+    transition: { type: "fade", duration: 0.5 }, timing: { perPhotoMin: 1, perPhotoMax: 6 },
+  }).photo;
+  const z = clipVideoParts(
+    { index: 0, frames: 60, fit: "cover", focus: { x: 0.8, y: 0.4 }, zoom: 2, hdr: false, info: sdr }, photo, 1080, 1350, 30,
+  );
+  assert.equal(z.parts.length, 1);
+  assert.match(z.parts[0]!, /crop='trunc\(min\(iw,ih\*1080\/1350\)\/2\/2\)\*2':'trunc\(min\(ih,iw\*1350\/1080\)\/2\/2\)\*2'/);
+  assert.match(z.parts[0]!, /0\.8\*iw-ow\/2/);
+  assert.match(z.parts[0]!, /scale=1080:1350:flags=lanczos,setsar=1\[c0\]$/);
+  // zoom 1 mantém o caminho original
+  const z1 = clipVideoParts(
+    { index: 0, frames: 60, fit: "cover", focus: { x: 0.5, y: 0.5 }, zoom: 1, hdr: false, info: sdr }, photo, 1080, 1350, 30,
+  );
+  assert.match(z1.parts[0]!, /force_original_aspect_ratio=increase/);
+});
+
 test("duração: clipes têm duração própria e as fotos dividem o resto", () => {
   // 3 fotos + clipes de 4 s e 3 s = 5 segmentos, 4 transições de 18 quadros, vídeo de 20 s
   const r = computeTiming({ ...base, photoCount: 3, mode: "fixed", requestedTotal: 20, clips: [4, 3] });

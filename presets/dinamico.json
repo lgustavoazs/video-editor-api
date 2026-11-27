@@ -1,0 +1,77 @@
+{
+  "id": "dinamico",
+  "version": 1,
+  "name": "Dinâmico",
+  "extends": "limpo",
+  "description": "Imagem nítida e cores vivas, deslocamento lateral e transições variadas em ritmo rápido. Bom para esporte e eventos.",
+  "photo": {
+    "fit": "auto",
+    "filters": [
+      {
+        "type": "sharpen",
+        "amount": 0.7
+      },
+      {
+        "type": "clarity",
+        "amount": 0.6
+      },
+      {
+        "type": "color",
+        "saturation": 1.12,
+        "contrast": 1.05
+      }
+    ]
+  },
+  "motion": {
+    "type": "kenburns",
+    "zoomFrom": 1.1,
+    "zoomTo": 1.2,
+    "direction": "alternate",
+    "pan": "alternate"
+  },
+  "transition": {
+    "types": [
+      "slideleft",
+      "smoothright",
+      "coverup",
+      "circleopen"
+    ],
+    "order": "cycle",
+    "duration": 0.5
+  },
+  "timing": {
+    "perPhotoMin": 1.0,
+    "perPhotoMax": 4
+  },
+  "audio": {
+    "fadeIn": 0.3,
+    "fadeOut": 1.0
+  },
+  "text": {
+    "title": {
+      "position": "top",
+      "size": 0.05,
+      "start": 0.3,
+      "duration": 2.5
+    },
+    "caption": {
+      "position": "bottom",
+      "size": 0.03
+    }
+  },
+  "branding": {
+    "watermark": {
+      "role": "brand",
+      "position": "top-left",
+      "width": 0.16,
+      "opacity": 0.95
+    },
+    "outro": {
+      "role": "partner",
+      "duration": 2.0,
+      "background": "#0b0b0b",
+      "width": 0.5,
+      "caption": "Apoio"
+    }
+  }
+}

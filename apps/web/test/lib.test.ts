@@ -22,7 +22,7 @@ function item(over: Partial<DraftItem> = {}): DraftItem {
 }
 
 function draft(over: Partial<Draft> = {}): Draft {
-  return { preset: "limpo", platform: "instagram_reels", title: "", items: [item()], music: { kind: "none", duration: 15 }, logos: {}, ...over };
+  return { preset: "limpo", platform: "instagram_reels", title: "", items: [item()], music: { kind: "none", duration: 15 }, fades: {}, logos: {}, ...over };
 }
 
 describe("tempo", () => {
@@ -43,6 +43,12 @@ describe("corte", () => {
     assert.ok(Math.abs(r.w - (9 / 16) / (4 / 3)) < 1e-9);
     assert.ok(Math.abs(r.x + r.w - 1) < 1e-9, "encosta na borda direita");
     assert.ok(cropLoss(4000, 3000, 9 / 16) > 0.5);
+  });
+  test("zoom: janela menor, ainda centrada no foco e dentro da foto", () => {
+    const r = cropRect(1080, 1920, 9 / 16, { x: 0.9, y: 0.1 }, 2);
+    assert.ok(Math.abs(r.w - 0.5) < 1e-9 && Math.abs(r.h - 0.5) < 1e-9);
+    assert.ok(Math.abs(r.x - 0.5) < 1e-9, "encosta na borda direita");
+    assert.equal(r.y, 0);
   });
   test("foto vertical no mesmo formato: nada é cortado", () => {
     assert.ok(cropLoss(1080, 1920, 9 / 16) < 1e-9);
@@ -78,6 +84,20 @@ describe("pedido", () => {
     assert.deepEqual(options.audio, { start: 30.123, end: 50, file: "musica" });
     assert.deepEqual(options.logos, [{ role: "brand", file: "logo_marca" }]);
     assert.deepEqual(files.map(([f]) => f), ["item01", "musica", "logo_marca"]);
+  });
+
+  test("zoom vai no item; entrada e saída da música vão em overrides só quando escolhidas", () => {
+    const base = draft({
+      items: [item({ zoom: 2.345, focus: { x: 0.2, y: 0.3 } }), item({ zoom: 1 })],
+      music: { kind: "file", file: file("m.mp3", 10, "audio/mpeg"), start: 0, end: 20, loop: false },
+    });
+    const a = buildRequest(base).options;
+    assert.deepEqual((a.items as Record<string, unknown>[])[0], { file: "item01", type: "photo", focus: { x: 0.2, y: 0.3 }, zoom: 2.35 });
+    assert.equal((a.items as Record<string, unknown>[])[1]!.zoom, undefined);
+    assert.equal(a.overrides, undefined, "padrão do estilo: não manda nada");
+    const b = buildRequest({ ...base, fades: { fadeIn: 0, fadeOut: 3 } }).options;
+    assert.deepEqual(b.overrides, { audio: { fadeIn: 0, fadeOut: 3 } });
+    assert.match(validateDraft({ ...base, music: { ...base.music, end: 4 } as Draft["music"], fades: { fadeIn: 2, fadeOut: 3 } })[0]!, /somam/);
   });
 
   test("música da biblioteca", () => {

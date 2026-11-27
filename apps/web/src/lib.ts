@@ -18,6 +18,8 @@ export interface DraftItem {
   width?: number;
   height?: number;
   focus?: Focus;
+  /** Aproximação do enquadramento (1 = sem zoom). */
+  zoom?: number;
   caption: string;
   /** Clipes: duração do arquivo e trecho escolhido, em segundos. */
   sourceDuration?: number;
@@ -38,8 +40,15 @@ export interface Draft {
   title: string;
   items: DraftItem[];
   music: MusicChoice;
+  /** Entrada e saída da música, em segundos (0 = corte seco). Ausente = padrão do estilo. */
+  fades: { fadeIn?: number; fadeOut?: number };
   logos: { brand?: File; partner?: File };
 }
+
+export const MAX_ZOOM = 4;
+
+/** Opções de entrada e saída da música oferecidas na tela. */
+export const FADE_CHOICES = [0, 0.5, 1, 2, 3];
 
 /** Arredonda segundos para milésimos (o servidor quantiza em quadros). */
 export const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -70,12 +79,15 @@ export function parseTime(text: string): number | undefined {
  * (modo "cover"), centrada no ponto de interesse. Valores em fração (0 a 1)
  * da largura e da altura da foto. Mesma regra do motor.
  */
-export function cropRect(imgW: number, imgH: number, targetAspect: number, focus: Focus = { x: 0.5, y: 0.5 }) {
+export function cropRect(imgW: number, imgH: number, targetAspect: number, focus: Focus = { x: 0.5, y: 0.5 }, zoom = 1) {
   const imgAspect = imgW / imgH;
   let w = 1;
   let h = 1;
   if (imgAspect > targetAspect) w = targetAspect / imgAspect;
   else h = imgAspect / targetAspect;
+  // Zoom: a mesma janela, menor (mostra uma área menor, ampliada no vídeo).
+  w /= zoom;
+  h /= zoom;
   const clamp = (v: number, size: number) => Math.min(1 - size, Math.max(0, v - size / 2));
   return { x: clamp(focus.x, w), y: clamp(focus.y, h), w, h };
 }
@@ -90,6 +102,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
   instagram_reels: "Instagram Reels",
   facebook_reels: "Facebook Reels",
   facebook_feed: "Facebook (feed)",
+  instagram_feed: "Instagram (feed)",
   tiktok: "TikTok",
   youtube_shorts: "YouTube Shorts",
 };
@@ -114,6 +127,9 @@ export function validateDraft(d: Draft): string[] {
   if (d.music.kind === "file" && d.music.file.size > LIMITS_MB.audio * MB) errors.push(`A música passa de ${LIMITS_MB.audio} MB.`);
   if (d.music.kind !== "none" && d.music.end - d.music.start < 3) errors.push("O trecho da música precisa ter pelo menos 3 segundos.");
   if (d.music.kind === "none" && !(d.music.duration > 0)) errors.push("Informe a duração do vídeo.");
+  if (d.music.kind !== "none" && (d.fades.fadeIn ?? 0) + (d.fades.fadeOut ?? 0) > d.music.end - d.music.start) {
+    errors.push("A entrada e a saída da música somam mais que o trecho escolhido.");
+  }
   for (const [role, f] of Object.entries(d.logos)) {
     if (f && f.size > LIMITS_MB.logo * MB) errors.push(`A logo de ${role === "brand" ? "marca" : "parceiro"} passa de ${LIMITS_MB.logo} MB.`);
   }
@@ -137,6 +153,7 @@ export function buildRequest(d: Draft): { options: Record<string, unknown>; file
     files.push([field, it.file]);
     const out: Record<string, unknown> = { file: field, type: it.kind };
     if (it.focus) out.focus = { x: round3(it.focus.x), y: round3(it.focus.y) };
+    if (it.zoom && it.zoom > 1.001) out.zoom = Math.round(it.zoom * 100) / 100;
     if (it.caption.trim()) out.caption = it.caption.trim();
     if (it.kind === "clip") {
       const whole = it.sourceDuration;
@@ -166,6 +183,10 @@ export function buildRequest(d: Draft): { options: Record<string, unknown>; file
       audio.libraryId = m.id;
     }
     options.audio = audio;
+    const fades: Record<string, number> = {};
+    if (d.fades.fadeIn !== undefined) fades.fadeIn = d.fades.fadeIn;
+    if (d.fades.fadeOut !== undefined) fades.fadeOut = d.fades.fadeOut;
+    if (Object.keys(fades).length) options.overrides = { audio: fades };
   }
   const logos: { role: string; file: string }[] = [];
   if (d.logos.brand) {
