@@ -41,7 +41,7 @@ import { checkFile, discard, receiveUpload } from "./upload.js";
 import { checkCallbackUrl, WebhookSender } from "./webhook.js";
 
 const run = promisify(execFile);
-export const API_VERSION = "3A";
+export const API_VERSION = "3B";
 /** Pré-visualização: metade da resolução da plataforma e no máximo 10 s. */
 export const PREVIEW_SCALE = 0.5;
 export const PREVIEW_MAX_SECONDS = 10;
@@ -147,6 +147,23 @@ export async function buildApp(
     if (!given || !sameSecret(given, cfg.adminKey)) {
       throw new ApiError(401, "unauthorized", "Chave de administrador inválida");
     }
+  }
+
+  /** Amostras: chave de administrador ou sessão do site (decisão da Fase 3B). */
+  async function requireAdminOrSession(req: FastifyRequest): Promise<void> {
+    if (hasSession(cfg, req)) {
+      req.apiKey = SITE_KEY;
+      return;
+    }
+    await requireAdmin(req);
+  }
+
+  /** Pré-visualização pedida por quem está consultando (admin vê todas; o site, as do site). */
+  function previewJob(req: FastifyRequest, id: string): JobRow {
+    const job = /^[0-9a-f-]{36}$/.test(id) ? db.job(id) : undefined;
+    const visible = job && job.kind === "preview" && (req.apiKey === SITE_KEY ? job.key_id === SITE_KEY.id : true);
+    if (!visible) throw new ApiError(404, "preview_not_found", "Pré-visualização não encontrada");
+    return job;
   }
 
   function baseUrl(req: FastifyRequest): string {
@@ -398,11 +415,11 @@ export async function buildApp(
   });
 
   /** Pré-visualização do editor: curta, em resolução reduzida e com prioridade na fila. */
-  app.post("/v1/previews", { preHandler: requireAdmin }, async (req, reply) => {
+  app.post("/v1/previews", { preHandler: requireAdminOrSession }, async (req, reply) => {
     if (queue.isPreviewFull()) throw new ApiError(503, "queue_full", "Pré-visualizações demais aguardando. Tente em instantes.");
     const id = randomUUID();
     try {
-      const planned = await receiveAndSubmit(req, id, "preview");
+      const planned = await receiveAndSubmit(req, id, "preview", req.apiKey);
       const base = baseUrl(req);
       return reply.code(202).send({
         id,
@@ -412,13 +429,23 @@ export async function buildApp(
         itemCount: planned.itemCount,
         audioTrack: planned.audioTrack,
         warnings: planned.warnings,
-        statusUrl: `${base}/v1/admin/jobs/${id}`,
+        statusUrl: `${base}/v1/previews/${id}`,
       });
     } catch (err) {
       await discard(jobDir(cfg, id));
       throw err;
     }
   });
+
+  app.get<{ Params: { id: string } }>("/v1/previews/:id", { preHandler: requireAdminOrSession }, async (req) => {
+    const view = jobView(previewJob(req, req.params.id), req);
+    if (view.downloadUrl) view.downloadUrl = `${baseUrl(req)}/v1/previews/${req.params.id}/download`;
+    return view;
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/previews/:id/download", { preHandler: requireAdminOrSession }, async (req, reply) =>
+    sendVideo(previewJob(req, req.params.id), req, reply),
+  );
 
   app.get<{ Params: { id: string } }>("/v1/videos/:id", { preHandler: requireKey }, async (req) => jobView(ownJob(req, req.params.id), req));
 
@@ -476,6 +503,23 @@ export async function buildApp(
 
   app.get("/v1/presets", { preHandler: requireKey }, async () => ({ presets: await presets.list() }));
   app.get("/v1/presets/schema", { preHandler: requireKey }, async () => presetSchema);
+  app.get("/v1/presets/luts", { preHandler: requireKey }, async () => ({
+    luts: (await readdir(cfg.assets.lutsDir).catch(() => [] as string[])).filter((f) => f.endsWith(".cube")).sort(),
+  }));
+  /** Confere um preset inteiro (como o editor exporta) com as mesmas regras dos arquivos. */
+  app.post<{ Body: unknown }>("/v1/presets/validate", { preHandler: requireKey, bodyLimit: 256 * 1024 }, async (req) => {
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new ApiError(400, "invalid_json", "Envie o preset como um objeto JSON");
+    }
+    const scratch = join(cfg.dataDir, "tmp", randomUUID());
+    try {
+      const preset = await presets.inline(body as Record<string, unknown>, scratch);
+      return { ok: true, preset };
+    } finally {
+      await discard(scratch);
+    }
+  });
   app.get<{ Params: { id: string } }>("/v1/presets/:id", { preHandler: requireKey }, async (req) => presets.get(req.params.id));
   app.get("/v1/platforms", { preHandler: requireKey }, async () => ({ platforms: listPlatforms() }));
   app.get("/v1/audio", { preHandler: requireKey }, async () => audioLibrary.list());

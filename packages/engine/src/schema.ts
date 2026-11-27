@@ -68,11 +68,11 @@ export const presetSchema = {
         fit: {
           type: "string", enum: ["cover", "contain", "auto"], default: "auto", title: "Enquadramento",
           description:
-            "cover corta para preencher; contain mostra a foto inteira sobre um fundo; auto escolhe pelo formato da foto",
+            "Cortar preenche o quadro; Mostrar inteira põe a foto sobre um fundo; Automático escolhe pelo formato da foto (cover, contain, auto)",
         },
         autoThreshold: {
           type: "number", minimum: 0, maximum: 1, default: 0.5, title: "Limite do modo auto",
-          description: "Se o corte removeria mais que esta fração da foto, usa contain",
+          description: "Se o corte removeria mais que esta fração da foto, mostra a foto inteira",
         },
         background: {
           type: "object",
@@ -80,10 +80,10 @@ export const presetSchema = {
           additionalProperties: false,
           default: {},
           properties: {
-            type: { type: "string", enum: ["blur", "color"], default: "blur" },
+            type: { type: "string", enum: ["blur", "color"], default: "blur", title: "Tipo de fundo" },
             blur: { type: "number", minimum: 0, maximum: 100, default: 40, title: "Desfoque" },
             darken: { type: "number", minimum: 0, maximum: 0.9, default: 0.35, title: "Escurecimento" },
-            color: { ...HEX_COLOR, default: "#000000" },
+            color: { ...HEX_COLOR, default: "#000000", title: "Cor do fundo" },
           },
         },
         filters: {
@@ -150,7 +150,7 @@ export const presetSchema = {
       additionalProperties: false,
       required: ["type"],
       properties: {
-        type: { type: "string", enum: ["kenburns", "none"] },
+        type: { type: "string", enum: ["kenburns", "none"], title: "Tipo de movimento" },
         zoomFrom: { type: "number", minimum: 1, maximum: 3, default: 1, title: "Zoom inicial" },
         zoomTo: { type: "number", minimum: 1, maximum: 3, default: 1.12, title: "Zoom final" },
         direction: {
@@ -177,7 +177,7 @@ export const presetSchema = {
         },
         order: {
           type: "string", enum: ["cycle", "random"], default: "cycle", title: "Ordem da lista",
-          description: "cycle percorre em rodízio; random sorteia com semente fixa",
+          description: "Rodízio percorre a lista em ordem; Sorteio escolhe ao acaso, sempre igual para a mesma semente",
         },
         seed: { type: "integer", minimum: 0, maximum: 4294967295, default: 1, title: "Semente do sorteio" },
         duration: { type: "number", minimum: 0, maximum: 3, title: "Duração (s)" },

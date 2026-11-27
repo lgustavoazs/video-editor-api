@@ -32,11 +32,12 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
   - `audio.ts`: catálogo `audio/library.json` (por `libraryId` ou `mood` + `seed`); catálogo inválido impede o servidor de iniciar.
   - `docs.ts`: OpenAPI 3.1 escrito à mão + Swagger UI em `/docs` (público). Toda rota nova precisa entrar aqui: um teste confere.
   - Pré-visualização: `kind = "preview"`, metade da resolução, `veryfast`, até 6 itens e 10 s, prioridade na fila.
-  - `session.ts`: login do site (`SITE_PASSWORD`) → cookie assinado HttpOnly SameSite=Strict, 30 dias; a sessão vale como a "chave" interna `site` (não vale para `/v1/admin/*`). O site compilado (`apps/web/dist`) é servido em `/app` com CSP.
+  - `session.ts`: login do site (`SITE_PASSWORD`) → cookie assinado HttpOnly SameSite=Strict, 30 dias; a sessão vale como a "chave" interna `site` (não vale para `/v1/admin/*`; vale para `/v1/previews`, decisão da 3B). O site compilado (`apps/web/dist`) é servido em `/app` com CSP.
 - `apps/web/src` (Fase 3A, React + Vite, base `/app/`):
   - `lib.ts`: funções puras testadas (montar o pedido, corte com foco, tempos, validação). A ordem do vídeo é a ordem de `items`.
   - `NewVideo.tsx` (tela principal), `ItemsPanel.tsx` (envio e ordem com dnd-kit), `ItemEditor.tsx` (foco e moldura do corte; trecho do clipe), `MusicPanel.tsx` (wavesurfer com região do trecho), `LogosPanel.tsx`, `JobView.tsx`, `MyVideos.tsx`.
   - `media.ts`: HEIC → JPEG com `heic-to/csp` (LGPL; carregado só quando aparece HEIC, em arquivo separado).
+  - `editor/` (Fase 3B): `StyleEditor.tsx` (aba Estilos), `SchemaField.tsx` (campo desenhado a partir do nó do schema: faixas, títulos e valores vêm de lá), `ListEditors.tsx` (filtros e transições), `InstantPreview.tsx` (prévia aproximada com CSS), `schemaUtil.ts` (funções puras testadas: exportar só os blocos diferentes do Limpo, filtros → CSS). Sem Ajv no navegador (a CSP bloqueia código gerado): a validação é `POST /v1/presets/validate`.
 - `audio/`: biblioteca de músicas (começa vazia; poucas faixas no repositório, só com licença para uso comercial).
 - `presets/`: um JSON por estilo; `limpo.json` é o neutro, base para os demais (`cinema`, `dinamico`, `retro-quente`, `preto-e-branco`, todos com `extends: limpo`). LUTs em `presets/luts/`. Cuidado com grão forte e transições de pontilhado (`dissolve`): multiplicam o tamanho do arquivo.
 - `assets/fonts`: fontes DejaVu (licença livre) para o texto renderizar igual em qualquer máquina.
@@ -66,7 +67,7 @@ Site/API que recebe N fotos (+ áudio opcional, com trecho escolhido) e devolve 
 2B. API: concluída (webhook, `/v1/previews`, biblioteca de áudio, OpenAPI pública em `/docs`).
 3A. Site: concluída (login, criar vídeo, progresso, Meus vídeos; celular).
 3A.1. Ajustes do site: concluída: perfil Instagram feed (4:5); estilos Cinema, Dinâmico, Retrô quente e Preto e branco; quadro + e soltar arquivos na posição; área exibida com zoom em fotos e clipes; início e fim da música.
-3B. Editor visual de presets (exporta JSON), com prévia aproximada e amostra real por `/v1/previews`.
+3B. Editor visual de estilos (esta): aba Estilos; controles pelo schema; prévia aproximada; amostra real por `/v1/previews` (liberada para a sessão do site); validação no servidor; exporta JSON (herda do Limpo). O editor não grava no servidor: o dono manda o JSON e ele entra em `presets/` por PR.
 ★ Presets por nicho (ficou para o final, por decisão do dono): ficha, amostras e aprovação, já com o editor visual.
 V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupla exposição, restauração.
 
@@ -82,6 +83,7 @@ V1.2 (ideia registrada): modelos de composição em camadas; olho de peixe, dupl
 - Arquivos de música no repositório servem para poucas faixas; se a biblioteca crescer, mover para o volume com upload pela administração.
 - `heic-to` (conversão de HEIC no navegador) é LGPL-3.0; para uso comercial, manter como arquivo separado e citar a licença (ou trocar a solução).
 - O preset Limpo não tem título, legenda nem logos (o site avisa); os outros quatro têm.
+- Títulos e descrições do schema aparecem direto no editor: mantê-los em português e sem termos internos.
 - Os estilos genéricos (versão 1) foram aprovados pelo dono pelas amostras em 2026-11-27; ajustes finos podem vir com o editor (3B).
 - O servidor registra os arquivos do site ao iniciar: depois de recompilar o site, reinicie a API (em produção o deploy já faz isso).
 - A chave criada antes da 2B não tem segredo de webhook: gerar com `POST /v1/admin/keys/:id/webhook-secret`.

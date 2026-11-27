@@ -197,3 +197,77 @@ describe("páginas do site", () => {
     }
   });
 });
+
+describe("editor de estilos (Fase 3B)", () => {
+  async function previewForm(preset: unknown) {
+    const form = new FormData();
+    form.append("options", JSON.stringify({ preset, items: [{ file: "f" }], timing: { total: 3 } }));
+    form.append("f", new Blob([await readFile(assets.photos[0]!)]), "f.jpg");
+    const r = new Response(form);
+    return { payload: Buffer.from(await r.arrayBuffer()), headers: { "content-type": r.headers.get("content-type")! } };
+  }
+
+  test("a sessão do site pede amostra com preset inteiro e acompanha em /v1/previews/:id", async () => {
+    const body = await previewForm({ extends: "limpo", id: "rascunho", version: 1, name: "Rascunho", letterbox: 0.1 });
+    const res = await api.app.inject({ method: "POST", url: "/v1/previews", payload: body.payload, headers: { ...body.headers, cookie } });
+    assert.equal(res.statusCode, 202, res.body);
+    const { id, statusUrl } = res.json() as { id: string; statusUrl: string };
+    assert.ok(statusUrl.endsWith(`/v1/previews/${id}`));
+    let view: { status: string; downloadUrl?: string; result?: { width: number } } = { status: "queued" };
+    for (let i = 0; i < 300 && (view.status === "queued" || view.status === "processing"); i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      view = (await api.app.inject({ method: "GET", url: `/v1/previews/${id}`, headers: { cookie } })).json();
+    }
+    assert.equal(view.status, "done");
+    assert.equal(view.result!.width, 540);
+    assert.ok(view.downloadUrl!.endsWith(`/v1/previews/${id}/download`));
+    const dl = await api.app.inject({ method: "GET", url: `/v1/previews/${id}/download`, headers: { cookie } });
+    assert.equal(dl.statusCode, 200);
+    // não aparece em Meus vídeos
+    const list = (await api.app.inject({ method: "GET", url: "/v1/videos", headers: { cookie } })).json().videos as { id: string }[];
+    assert.ok(!list.some((v) => v.id === id));
+    // um vídeo comum não é consultável como pré-visualização
+    const notPreview = await api.app.inject({ method: "GET", url: `/v1/previews/${list[0]?.id ?? "00000000-0000-0000-0000-000000000000"}`, headers: { cookie } });
+    assert.equal(notPreview.statusCode, 404);
+  });
+
+  test("sem sessão nem chave de administrador: 401; a pré-visualização do admin não aparece para o site", async () => {
+    const body = await previewForm("limpo");
+    const anon = await api.app.inject({ method: "POST", url: "/v1/previews", payload: body.payload, headers: body.headers });
+    assert.equal(anon.statusCode, 401);
+    const adm = await api.app.inject({ method: "POST", url: "/v1/previews", payload: body.payload, headers: { ...body.headers, "x-admin-key": ADMIN } });
+    assert.equal(adm.statusCode, 202, adm.body);
+    const id = adm.json().id as string;
+    assert.equal((await api.app.inject({ method: "GET", url: `/v1/previews/${id}`, headers: { cookie } })).statusCode, 404);
+    assert.equal((await api.app.inject({ method: "GET", url: `/v1/previews/${id}?key=${ADMIN}` })).statusCode, 200);
+  });
+
+  test("lista de LUTs", async () => {
+    const res = await api.app.inject({ method: "GET", url: "/v1/presets/luts", headers: { cookie } });
+    assert.ok((res.json().luts as string[]).includes("cinema-azul-laranja.cube"));
+  });
+
+  test("validação de preset: devolve o resolvido ou o motivo em português", async () => {
+    const ok = await api.app.inject({
+      method: "POST",
+      url: "/v1/presets/validate",
+      headers: { cookie },
+      payload: { extends: "limpo", id: "teste", version: 1, name: "Teste", transition: { types: ["fade", "wipeleft"], duration: 0.5 } },
+    });
+    assert.equal(ok.statusCode, 200, ok.body);
+    const preset = ok.json().preset;
+    assert.deepEqual(preset.transition.types, ["fade", "wipeleft"]);
+    assert.ok(preset.motion, "herdou o movimento do Limpo");
+    const bad = await api.app.inject({
+      method: "POST",
+      url: "/v1/presets/validate",
+      headers: { cookie },
+      payload: { extends: "limpo", id: "teste", version: 1, name: "Teste", letterbox: 0.9 },
+    });
+    assert.equal(bad.statusCode, 422);
+    assert.equal(bad.json().error.code, "invalid_preset");
+    assert.match(bad.json().error.message, /letterbox/);
+    const missing = await api.app.inject({ method: "POST", url: "/v1/presets/validate", headers: { cookie }, payload: { extends: "nao-existe", id: "x", version: 1, name: "X" } });
+    assert.equal(missing.statusCode, 422);
+  });
+});
