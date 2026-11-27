@@ -50,6 +50,7 @@ export interface Platform {
   height: number;
   fps: number;
   maxDuration: number;
+  safeZone: { top: number; bottom: number; left: number; right: number };
 }
 export interface Track {
   id: string;
@@ -94,14 +95,21 @@ export const api = {
   deleteVideo: (id: string) => request<void>("DELETE", `/v1/videos/${id}`),
   downloadUrl: (id: string) => `/v1/videos/${id}/download`,
 
+  schema: () => request<Record<string, unknown>>("GET", "/v1/presets/schema"),
+  luts: () => request<{ luts: string[] }>("GET", "/v1/presets/luts").then((r) => r.luts),
+  /** Confere o preset no servidor (mesmas regras dos arquivos) e devolve o resolvido. */
+  validatePreset: (preset: unknown) => request<{ ok: true; preset: Record<string, unknown> }>("POST", "/v1/presets/validate", preset),
+  preview: (id: string) => request<Job>("GET", `/v1/previews/${id}`),
+  previewDownloadUrl: (id: string) => `/v1/previews/${id}/download`,
+
   /**
    * Envia o pedido com progresso do upload (fetch ainda não informa o progresso do envio).
    * `onUpload` recebe de 0 a 1.
    */
-  createVideo(form: FormData, onUpload: (fraction: number) => void): { promise: Promise<Created>; abort: () => void } {
+  createVideo(form: FormData, onUpload: (fraction: number) => void, path = "/v1/videos"): { promise: Promise<Created>; abort: () => void } {
     const xhr = new XMLHttpRequest();
     const promise = new Promise<Created>((resolve, reject) => {
-      xhr.open("POST", "/v1/videos");
+      xhr.open("POST", path);
       xhr.withCredentials = true;
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onUpload(e.loaded / e.total);

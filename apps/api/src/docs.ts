@@ -231,6 +231,24 @@ export function openApiDocument(version: string) {
       "/v1/presets/schema": {
         get: { tags: ["Catálogo"], summary: "JSON Schema dos presets", security: [{ apiKey: [] }], responses: { "200": { description: "JSON Schema" }, ...errors(401) } },
       },
+      "/v1/presets/luts": {
+        get: {
+          tags: ["Catálogo"],
+          summary: "Arquivos LUT (.cube) disponíveis para o filtro lut",
+          security: [{ apiKey: [] }],
+          responses: { "200": { description: "Lista de nomes de arquivo" }, ...errors(401) },
+        },
+      },
+      "/v1/presets/validate": {
+        post: {
+          tags: ["Catálogo"],
+          summary: "Conferir um preset inteiro (com extends) com as regras do servidor",
+          description: "Devolve o preset resolvido (herança aplicada e valores padrão preenchidos) ou 422 com o motivo, em português.",
+          security: [{ apiKey: [] }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+          responses: { "200": { description: "Válido: { ok: true, preset }" }, ...errors(400, 401, 422) },
+        },
+      },
       "/v1/presets/{id}": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         get: { tags: ["Catálogo"], summary: "Um preset completo", security: [{ apiKey: [] }], responses: { "200": { description: "Preset" }, ...errors(401, 404) } },
@@ -264,10 +282,28 @@ export function openApiDocument(version: string) {
         post: {
           tags: ["Administração"],
           summary: "Pré-visualização curta (até 6 itens, 10 s, metade da resolução), com prioridade na fila",
-          description: "O preset pode ser um id ou o preset inteiro (como o editor exporta). Consulte em /v1/admin/jobs/{id}.",
+          description: "O preset pode ser um id ou o preset inteiro (como o editor exporta). Aceita a chave de administrador ou a sessão do site. Consulte em /v1/previews/{id}.",
           security: [{ adminKey: [] }],
           requestBody: multipartBody("#/components/schemas/PreviewOptions", "Campo `options` (JSON, ver PreviewOptions) e os arquivos"),
-          responses: { ...accepted("/v1/admin/jobs/{id}"), ...errors(400, 401, 413, 415, 422, 503) },
+          responses: { ...accepted("/v1/previews/{id}"), ...errors(400, 401, 413, 415, 422, 503) },
+        },
+      },
+      "/v1/previews/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        get: {
+          tags: ["Administração"],
+          summary: "Estado de uma pré-visualização (chave de administrador ou sessão do site)",
+          security: [{ adminKey: [] }],
+          responses: { "200": { description: "Estado", content: { "application/json": { schema: { $ref: "#/components/schemas/Job" } } } }, ...errors(401, 404) },
+        },
+      },
+      "/v1/previews/{id}/download": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        get: {
+          tags: ["Administração"],
+          summary: "Baixar a pré-visualização (aceita Range)",
+          security: [{ adminKey: [] }],
+          responses: { "200": { description: "Vídeo", content: { "video/mp4": { schema: { type: "string", format: "binary" } } } }, ...errors(401, 404, 409, 410) },
         },
       },
       "/v1/admin/keys": {

@@ -2,7 +2,7 @@
 
 Site/API que aplica efeitos em fotos (sem IA, com presets JSON fixos) e gera vídeos curtos com áudio para Instagram, Facebook, TikTok e YouTube Shorts.
 
-**Estado atual: Fase 3A (site: criar vídeo).** O motor renderiza fotos e clipes com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos, enfileira, avisa por webhook e devolve o vídeo, com documentação em `/docs`. O site, em `/app`, cria vídeos pelo navegador (computador ou celular). O editor visual de presets vem na Fase 3B.
+**Estado atual: Fase 3B (editor de estilos).** O motor renderiza fotos e clipes com todos os efeitos do catálogo, logos, texto e trecho de áudio. A API recebe os arquivos, enfileira, avisa por webhook e devolve o vídeo, com documentação em `/docs`. O site, em `/app`, cria vídeos pelo navegador (computador ou celular). Na aba Estilos, um editor visual cria e ajusta presets, com prévia rápida e amostra real.
 
 ## Estrutura
 
@@ -118,6 +118,14 @@ Tela **Novo vídeo**:
 
 Tela **Meus vídeos**: os vídeos das últimas 24 h, com assistir, baixar e apagar.
 
+Tela **Estilos** (editor de presets, só no computador):
+
+- Abrir um estilo existente, duplicar, começar um novo a partir do Limpo ou importar um JSON.
+- Controles gerados a partir do schema dos presets (mesmas faixas do motor): enquadramento, filtros (adicionar, reordenar, remover), movimento, transições, ritmo, barras de cinema, música, título e legendas, logos.
+- **Prévia rápida** no navegador, com as suas fotos de exemplo: cor, P&B, sépia, desfoque, temperatura, vinheta, grão, barras, movimento, textos, marca d'água e cartões. É aproximada; LUT, curvas, nitidez, clareza e o desenho de cada transição só aparecem na amostra real.
+- **Amostra real**: vídeo de 10 s em metade da resolução, gerado pelo motor com o estilo em edição (fotos, logos e música de exemplo).
+- O estilo é conferido no servidor a cada mudança. **Exportar** baixa o JSON, que herda do Limpo e traz só o que mudou. O editor não grava no servidor: para o estilo aparecer no site, o arquivo entra em `presets/` por pull request.
+
 Desenvolvimento: `npm run api` (porta 3000) e, em outro terminal, `npm run dev -w @video-editor/web` (o Vite repassa `/v1` para a API).
 
 ## API
@@ -147,7 +155,10 @@ DATA_DIR=./data ADMIN_KEY=uma-chave-longa-qualquer npm run api   # porta 3000
 | `GET /v1/videos` | Vídeos recentes da chave (últimas 24 h) |
 | `GET /v1/audio/:id/file` | Arquivo de uma música da biblioteca |
 | `GET/POST/DELETE /v1/session` | Login do site (senha → cookie de sessão) |
-| `POST /v1/previews` | (admin) Pré-visualização: até 6 itens, 10 s, metade da resolução, passa na frente da fila |
+| `POST /v1/previews` | (admin ou sessão do site) Pré-visualização: até 6 itens, 10 s, metade da resolução, passa na frente da fila |
+| `GET /v1/previews/:id`, `/v1/previews/:id/download` | Estado e vídeo da pré-visualização |
+| `GET /v1/presets/luts` | Arquivos LUT disponíveis |
+| `POST /v1/presets/validate` | Confere um preset inteiro (com `extends`) e devolve o resolvido ou o motivo |
 | `POST /v1/admin/keys` `{"name": "..."}` | Cria uma chave de cliente e o segredo do webhook (mostrados uma única vez) |
 | `POST /v1/admin/keys/:id/webhook-secret` | Gera ou troca o segredo do webhook de uma chave |
 | `GET /v1/admin/keys`, `DELETE /v1/admin/keys/:id` | Lista e revoga chaves |

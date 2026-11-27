@@ -3,12 +3,18 @@ import { api, ApiError } from "./api.ts";
 import { Login } from "./Login.tsx";
 import { MyVideos } from "./MyVideos.tsx";
 import { NewVideo } from "./NewVideo.tsx";
+import { StyleEditor } from "./editor/StyleEditor.tsx";
 
-type Tab = "novo" | "meus";
+type Tab = "novo" | "meus" | "estilos";
 
 export function App() {
   const [state, setState] = useState<"loading" | "login" | "disabled" | "ready" | "offline">("loading");
   const [tab, setTab] = useState<Tab>("novo");
+  /** O editor só carrega quando a aba é aberta pela primeira vez. */
+  const [editorOpened, setEditorOpened] = useState(false);
+  useEffect(() => {
+    if (tab === "estilos") setEditorOpened(true);
+  }, [tab]);
   /** Muda quando um vídeo novo é criado, para a lista recarregar. */
   const [created, setCreated] = useState(0);
 
@@ -57,6 +63,9 @@ export function App() {
           <button className={tab === "meus" ? "tab active" : "tab"} onClick={() => setTab("meus")}>
             Meus vídeos
           </button>
+          <button className={tab === "estilos" ? "tab active" : "tab"} onClick={() => setTab("estilos")}>
+            Estilos
+          </button>
         </nav>
         <button
           className="link"
@@ -69,13 +78,19 @@ export function App() {
       </header>
       <main>
         {/* A tela de novo vídeo fica montada ao trocar de aba, para não perder o que foi preenchido. */}
-        <div hidden={tab !== "novo"}>
+        <div className="narrow" hidden={tab !== "novo"}>
           <NewVideo
             onCreated={() => setCreated((n) => n + 1)}
             onShowList={() => setTab("meus")}
           />
         </div>
-        {tab === "meus" && <MyVideos refreshKey={created} />}
+        {tab === "meus" && (
+          <div className="narrow">
+            <MyVideos refreshKey={created} />
+          </div>
+        )}
+        {/* O editor também fica montado: trocar de aba não perde o estilo em edição. */}
+        <div hidden={tab !== "estilos"}>{tab === "estilos" || editorOpened ? <StyleEditor /> : null}</div>
       </main>
     </div>
   );
